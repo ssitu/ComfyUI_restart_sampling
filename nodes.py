@@ -11,9 +11,11 @@ def get_supported_samplers():
     samplers.remove("uni_pc_bh2")
     return samplers
 
+
 def get_supported_restart_schedulers():
-    schedulers = ["karras"]
+    schedulers = ["karras", "exponential"]
     return schedulers
+
 
 class KRestartSampler:
     @classmethod

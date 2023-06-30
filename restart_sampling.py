@@ -71,7 +71,6 @@ def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive,
                     for _ in range(k):
                         x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
                         for i in range(n_restart - 1):
-                            print([seg_sigmas[i], seg_sigmas[i + 1]])
                             x = sampler(model, x, torch.tensor(
                                 [seg_sigmas[i], seg_sigmas[i + 1]], device=x.device), extra_args, callback, True)
                             pbar.update(1)

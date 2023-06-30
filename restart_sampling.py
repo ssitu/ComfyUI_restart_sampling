@@ -58,7 +58,9 @@ def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive,
         return x
 
     setattr(k_diffusion_sampling, sample_func_name, restart_wrapper)
-    samples = common_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
-                              positive, negative, latent_image, denoise=denoise)
-    setattr(k_diffusion_sampling, sample_func_name, sampler)
+    try:
+        samples = common_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
+                                  positive, negative, latent_image, denoise=denoise)
+    finally:
+        setattr(k_diffusion_sampling, sample_func_name, sampler)
     return samples

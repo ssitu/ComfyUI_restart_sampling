@@ -11,6 +11,9 @@ def get_supported_samplers():
     samplers.remove("uni_pc_bh2")
     return samplers
 
+def get_supported_restart_schedulers():
+    schedulers = ["karras"]
+    return schedulers
 
 class KRestartSampler:
     @classmethod
@@ -27,7 +30,8 @@ class KRestartSampler:
                 "negative": ("CONDITIONING", ),
                 "latent_image": ("LATENT", ),
                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "restart_info": ("STRING", {"default": "[3,2,0.06,0.30],\n[3,1,0.30,0.59]", "multiline": True}),
+                "segments": ("STRING", {"default": "[3,2,0.06,0.30],[3,1,0.30,0.59]", "multiline": False}),
+                "restart_scheduler": (get_supported_restart_schedulers(), {"default": "karras"}),
             }
         }
 
@@ -35,8 +39,8 @@ class KRestartSampler:
     FUNCTION = "sample"
     CATEGORY = "sampling"
 
-    def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, restart_info):
-        return restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, restart_info)
+    def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, segments, restart_scheduler):
+        return restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, segments, restart_scheduler)
 
 
 NODE_CLASS_MAPPINGS = {

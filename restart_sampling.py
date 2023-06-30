@@ -32,29 +32,49 @@ def round_restart_segments(sigmas, restart_segments):
         segment['t_min'] = min(sigmas, key=lambda s: abs(s - segment['t_min']))
 
 
-def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, restart_info):
+def calc_sigmas(scheduler, n, sigma_min, sigma_max, device):
+    if scheduler == "karras":
+        sigmas = k_diffusion_sampling.get_sigmas_karras(n, sigma_min, sigma_max, device=device)
+    elif scheduler == "exponential":
+        sigmas = k_diffusion_sampling.get_sigmas_exponential(n, sigma_min, sigma_max, device=device)
+    else:
+        raise ValueError("Unsupported scheduler")
+    return sigmas
+
+
+def calc_restart_steps(restart_segments):
+    restart_steps = 0
+    for segment in restart_segments:
+        restart_steps += (segment['n'] - 1) * segment['k']
+    return restart_steps
+
+
+def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, restart_info, restart_scheduler):
     sample_func_name = "sample_{}".format(sampler_name)
     sampler = getattr(k_diffusion_sampling, sample_func_name)
     restart_segments = prepare_restart_segments(restart_info)
 
     @torch.no_grad()
-    def restart_wrapper(model, x, sigmas, extra_args=None, callback=None, disable=None, s_churn=0., s_tmin=0., s_tmax=float('inf'), s_noise=1.):
+    def restart_wrapper(model, x, sigmas, extra_args=None, callback=None, disable=None):
         extra_args = {} if extra_args is None else extra_args
-
         round_restart_segments(sigmas, restart_segments)
-
-        for i in trange(len(sigmas) - 1, disable=disable):
-            x = sampler(model, x, torch.tensor([sigmas[i], sigmas[i + 1]], device=x.device),
-                        extra_args, callback, True, s_churn, s_tmin, s_tmax, s_noise)
-            seg = None
-            if any(sigmas[i + 1] == (seg := segment)['t_min'] for segment in restart_segments):
-                s_min, s_max, k, n_restart = seg['t_min'], seg['t_max'], seg['k'], seg['n']
-                for _ in range(k):
-                    x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
-                    seg_sigmas = k_diffusion_sampling.get_sigmas_karras(n_restart, s_min, s_max, device=x.device)
-                    for i in trange(n_restart - 1, disable=disable):
-                        x = sampler(model, x, torch.tensor(
-                            [seg_sigmas[i], seg_sigmas[i + 1]], device=x.device), extra_args, callback, True, s_churn, s_tmin, s_tmax, s_noise)
+        total_steps = (len(sigmas) - 1) + calc_restart_steps(restart_segments)
+        with trange(total_steps, disable=disable) as pbar:
+            for i in range(len(sigmas) - 1):
+                x = sampler(model, x, torch.tensor([sigmas[i], sigmas[i + 1]],
+                            device=x.device), extra_args, callback, True)
+                pbar.update(1)
+                seg = None
+                if any(sigmas[i + 1] == (seg := segment)['t_min'] for segment in restart_segments):
+                    s_min, s_max, k, n_restart = seg['t_min'], seg['t_max'], seg['k'], seg['n']
+                    seg_sigmas = calc_sigmas(restart_scheduler, n_restart, s_min, s_max, device=x.device)
+                    for _ in range(k):
+                        x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
+                        for i in range(n_restart - 1):
+                            print([seg_sigmas[i], seg_sigmas[i + 1]])
+                            x = sampler(model, x, torch.tensor(
+                                [seg_sigmas[i], seg_sigmas[i + 1]], device=x.device), extra_args, callback, True)
+                            pbar.update(1)
         return x
 
     setattr(k_diffusion_sampling, sample_func_name, restart_wrapper)

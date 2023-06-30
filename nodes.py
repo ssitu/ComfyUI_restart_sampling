@@ -1,6 +1,7 @@
 import comfy
 from .restart_sampling import restart_sampling
 
+
 def get_supported_samplers():
     samplers = comfy.samplers.KSampler.SAMPLERS.copy()
     samplers.remove("ddim")
@@ -26,6 +27,7 @@ class KRestartSampler:
                 "negative": ("CONDITIONING", ),
                 "latent_image": ("LATENT", ),
                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "restart_info": ("STRING", {"default": "[3,2,0.06,0.30],\n[3,1,0.30,0.59]", "multiline": True}),
             }
         }
 
@@ -33,8 +35,8 @@ class KRestartSampler:
     FUNCTION = "sample"
     CATEGORY = "sampling"
 
-    def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=1.0):
-        return restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=denoise)
+    def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, restart_info):
+        return restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, restart_info)
 
 
 NODE_CLASS_MAPPINGS = {

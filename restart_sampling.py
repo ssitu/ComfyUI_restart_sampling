@@ -3,6 +3,7 @@ import torch
 from tqdm.auto import trange
 from nodes import common_ksampler
 from comfy.k_diffusion import sampling as k_diffusion_sampling
+from comfy.utils import ProgressBar
 
 
 def add_restart_segment(restart_segments, n_restart, k, t_min, t_max):
@@ -59,27 +60,46 @@ def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive,
         extra_args = {} if extra_args is None else extra_args
         round_restart_segments(sigmas, restart_segments)
         total_steps = (len(sigmas) - 1) + calc_restart_steps(restart_segments)
+        step = 0
+
+        def callback_wrapper(x):
+            x["i"] = step
+            if callback is not None:
+                callback(x)
+
         with trange(total_steps, disable=disable) as pbar:
             for i in range(len(sigmas) - 1):
                 x = sampler(model, x, torch.tensor([sigmas[i], sigmas[i + 1]],
-                            device=x.device), extra_args, callback, True)
+                            device=x.device), extra_args, callback_wrapper, True)
                 pbar.update(1)
+                step += 1
                 seg = None
                 if any(sigmas[i + 1] == (seg := segment)['t_min'] for segment in restart_segments):
                     s_min, s_max, k, n_restart = seg['t_min'], seg['t_max'], seg['k'], seg['n']
                     seg_sigmas = calc_sigmas(restart_scheduler, n_restart, s_min, s_max, device=x.device)
                     for _ in range(k):
                         x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
-                        for i in range(n_restart - 1):
+                        for j in range(n_restart - 1):
                             x = sampler(model, x, torch.tensor(
-                                [seg_sigmas[i], seg_sigmas[i + 1]], device=x.device), extra_args, callback, True)
+                                [seg_sigmas[j], seg_sigmas[j + 1]], device=x.device), extra_args, callback_wrapper, True)
                             pbar.update(1)
+                            step += 1
         return x
 
     setattr(k_diffusion_sampling, sample_func_name, restart_wrapper)
+
+    # Add the additional steps to the progress bar
+    pbar_update_absolute = ProgressBar.update_absolute
+
+    def pbar_update_absolute_wrapper(self, value, total=None, preview=None):
+        pbar_update_absolute(self, value, total + calc_restart_steps(restart_segments), preview)
+
+    ProgressBar.update_absolute = pbar_update_absolute_wrapper
+
     try:
         samples = common_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
                                   positive, negative, latent_image, denoise=denoise)
     finally:
         setattr(k_diffusion_sampling, sample_func_name, sampler)
+        ProgressBar.update_absolute = pbar_update_absolute
     return samples

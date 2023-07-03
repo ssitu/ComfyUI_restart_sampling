@@ -29,8 +29,11 @@ def prepare_restart_segments(restart_info):
 
 
 def round_restart_segments(sigmas, restart_segments):
-    for segment in restart_segments:
-        segment['t_min'] = min(sigmas, key=lambda s: abs(s - segment['t_min']))
+    t_min_mapping = {}
+    for segment in reversed(restart_segments):  # Reversed to prioritize segments to the front
+        t_min_neighbor = min(sigmas, key=lambda s: abs(s - segment['t_min'])).item()
+        t_min_mapping[t_min_neighbor] = {'n': segment['n'], 'k': segment['k'], 't_max': segment['t_max']}
+    return t_min_mapping
 
 
 def calc_sigmas(scheduler, n, sigma_min, sigma_max, device):
@@ -45,7 +48,7 @@ def calc_sigmas(scheduler, n, sigma_min, sigma_max, device):
 
 def calc_restart_steps(restart_segments):
     restart_steps = 0
-    for segment in restart_segments:
+    for segment in restart_segments.values():
         restart_steps += (segment['n'] - 1) * segment['k']
     return restart_steps
 
@@ -54,12 +57,14 @@ def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive,
     sample_func_name = "sample_{}".format(sampler_name)
     sampler = getattr(k_diffusion_sampling, sample_func_name)
     restart_segments = prepare_restart_segments(restart_info)
+    total_steps = steps
 
     @torch.no_grad()
     def restart_wrapper(model, x, sigmas, extra_args=None, callback=None, disable=None):
         extra_args = {} if extra_args is None else extra_args
-        round_restart_segments(sigmas, restart_segments)
-        total_steps = (len(sigmas) - 1) + calc_restart_steps(restart_segments)
+        segments = round_restart_segments(sigmas, restart_segments)
+        nonlocal total_steps
+        total_steps = steps + calc_restart_steps(segments)
         step = 0
 
         def callback_wrapper(x):
@@ -73,9 +78,9 @@ def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive,
                             device=x.device), extra_args, callback_wrapper, True)
                 pbar.update(1)
                 step += 1
-                seg = None
-                if any(sigmas[i + 1] == (seg := segment)['t_min'] for segment in restart_segments):
-                    s_min, s_max, k, n_restart = seg['t_min'], seg['t_max'], seg['k'], seg['n']
+                if sigmas[i + 1].item() in segments:
+                    seg = segments[sigmas[i + 1].item()]
+                    s_min, s_max, k, n_restart = sigmas[i + 1], seg['t_max'], seg['k'], seg['n']
                     seg_sigmas = calc_sigmas(restart_scheduler, n_restart, s_min, s_max, device=x.device)
                     for _ in range(k):
                         x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
@@ -92,7 +97,7 @@ def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive,
     pbar_update_absolute = ProgressBar.update_absolute
 
     def pbar_update_absolute_wrapper(self, value, total=None, preview=None):
-        pbar_update_absolute(self, value, total + calc_restart_steps(restart_segments), preview)
+        pbar_update_absolute(self, value, total_steps, preview)
 
     ProgressBar.update_absolute = pbar_update_absolute_wrapper
 

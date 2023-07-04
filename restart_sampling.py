@@ -3,8 +3,8 @@ import torch
 from tqdm.auto import trange
 from nodes import common_ksampler
 from comfy.k_diffusion import sampling as k_diffusion_sampling
-from comfy.samplers import simple_scheduler, ddim_scheduler
 from comfy.utils import ProgressBar
+from .schedulers import SCHEDULER_MAPPING
 
 
 def add_restart_segment(restart_segments, n_restart, k, t_min, t_max):
@@ -38,23 +38,7 @@ def round_restart_segments(sigmas, restart_segments):
 
 
 def calc_sigmas(scheduler, n, sigma_min, sigma_max, model, device):
-    match scheduler:
-        case "karras":
-            return k_diffusion_sampling.get_sigmas_karras(n, sigma_min, sigma_max, device=device)
-        case "exponential":
-            return k_diffusion_sampling.get_sigmas_exponential(n, sigma_min, sigma_max, device=device)
-        case "normal":
-            def get_sigmas(model, n, s_min, s_max):
-                t_min, t_max = model.sigma_to_t(torch.tensor([s_min, s_max], device=device))
-                t = torch.linspace(t_max, t_min, n, device=device)
-                return k_diffusion_sampling.append_zero(model.t_to_sigma(t))
-            return get_sigmas(model.inner_model, n, sigma_min, sigma_max)
-        # case "simple":
-        #     sigmas = simple_scheduler(model.inner_model, steps)
-        # case "ddim_uniform":
-        #     sigmas = ddim_scheduler(model.inner_model, steps)
-        case _:
-            raise ValueError("Unsupported scheduler")
+    return SCHEDULER_MAPPING[scheduler](model.inner_model, n, sigma_min, sigma_max, device)
 
 
 def calc_restart_steps(restart_segments):

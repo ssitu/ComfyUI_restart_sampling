@@ -1,5 +1,5 @@
 import comfy
-from .restart_sampling import restart_sampling
+from .restart_sampling import restart_sampling, SCHEDULER_MAPPING
 
 
 def get_supported_samplers():
@@ -13,10 +13,7 @@ def get_supported_samplers():
 
 
 def get_supported_restart_schedulers():
-    schedulers = comfy.samplers.KSampler.SCHEDULERS.copy()
-    schedulers.remove("simple")
-    schedulers.remove("ddim_uniform")
-    return schedulers
+    return list(SCHEDULER_MAPPING.keys())
 
 
 class KRestartSampler:

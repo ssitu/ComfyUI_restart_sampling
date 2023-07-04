@@ -13,7 +13,9 @@ def get_supported_samplers():
 
 
 def get_supported_restart_schedulers():
-    schedulers = ["karras", "exponential"]
+    schedulers = comfy.samplers.KSampler.SCHEDULERS.copy()
+    schedulers.remove("simple")
+    schedulers.remove("ddim_uniform")
     return schedulers
 
 

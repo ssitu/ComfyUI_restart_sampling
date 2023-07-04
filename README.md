@@ -26,6 +26,7 @@ These images can be dragged into ComfyUI to load their workflows.
 | ![image](./examples/heun_edm_00002_.png) | ![image](./examples/heun_edm_restarts_00002_.png) |
 | ![image](./examples/heun_edm_00003_.png) | ![image](./examples/heun_edm_restarts_00003_.png) |
 | ![image](./examples/heun_edm_00001_.png) | ![image](./examples/heun_edm_restarts_00001_.png) |
+
 Image slider links:
 - https://imgsli.com/MTg5NzI4
 - https://imgsli.com/MTg5NzI5

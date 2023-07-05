@@ -21,7 +21,7 @@ Nodes can be found in the node menu under `sampling`:
 
 ## Comparisons
 These images can be dragged into ComfyUI to load their workflows.
-Each image is done with 18 steps using the Heun sampler and a Karras schedule. The images in the right column use a restart segment of $[N_{\textrm{Restart}}=3, K=2, t_{\textrm{min}}=0.06, t_{\textrm{max}}=0.30]$, which adds 4 steps.
+Each image is done using the Stable Diffusion v1.5 checkpoint with 18 steps using the Heun sampler and a Karras schedule. The images in the right column use a restart segment of $[N_{\textrm{Restart}}=3, K=2, t_{\textrm{min}}=0.06, t_{\textrm{max}}=0.30]$, which adds 4 steps.
 | Without | With |
 | --- | --- |
 | ![image](./examples/heun_edm_00002_.png) | ![image](./examples/heun_edm_restarts_00002_.png) |

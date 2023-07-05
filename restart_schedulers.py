@@ -1,5 +1,6 @@
 import torch
 from comfy.k_diffusion import sampling as k_diffusion_sampling
+import warnings
 
 
 def get_sigmas_karras(model, n, s_min, s_max, device):
@@ -28,6 +29,18 @@ def get_sigmas_simple(model, n, s_min, s_max, device):
     return torch.tensor(sigs, device=device)
 
 
+def get_sigmas_ddim_uniform(model, n, s_min, s_max, device):
+    t_min, t_max = model.sigma_to_t(torch.tensor([s_min, s_max], device=device))
+    ddim_timesteps = torch.linspace(t_max, t_min, n, dtype=torch.int16, device=device)
+    sigs = []
+    for ts in ddim_timesteps:
+        if ts > 999:
+            ts = 999
+        sigs.append(model.t_to_sigma(ts))
+    sigs += [0.0]
+    return torch.tensor(sigs, device=device)
+
+
 def get_sigmas_simple_test(model, n, s_min, s_max, device):
     min_idx = torch.argmin(torch.abs(model.sigmas - s_min))
     max_idx = torch.argmin(torch.abs(model.sigmas - s_max))
@@ -45,5 +58,6 @@ SCHEDULER_MAPPING = {
     "karras": get_sigmas_karras,
     "exponential": get_sigmas_exponential,
     "simple": get_sigmas_simple,
+    "ddim_uniform": get_sigmas_ddim_uniform,
     "simple_test": get_sigmas_simple_test,
 }

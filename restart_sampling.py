@@ -4,7 +4,7 @@ from tqdm.auto import trange
 from nodes import common_ksampler
 from comfy.k_diffusion import sampling as k_diffusion_sampling
 from comfy.utils import ProgressBar
-from .schedulers import SCHEDULER_MAPPING
+from .restart_schedulers import SCHEDULER_MAPPING
 
 
 def add_restart_segment(restart_segments, n_restart, k, t_min, t_max):
@@ -48,18 +48,22 @@ def calc_restart_steps(restart_segments):
     return restart_steps
 
 
+total_steps = 0
+
+
 def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, restart_info, restart_scheduler):
     sample_func_name = "sample_{}".format(sampler_name)
     sampler = getattr(k_diffusion_sampling, sample_func_name)
     restart_segments = prepare_restart_segments(restart_info)
+    global total_steps
     total_steps = steps
 
     @torch.no_grad()
     def restart_wrapper(model, x, sigmas, extra_args=None, callback=None, disable=None):
         extra_args = {} if extra_args is None else extra_args
         segments = round_restart_segments(sigmas, restart_segments)
-        nonlocal total_steps
-        total_steps = steps + calc_restart_steps(segments)
+        global total_steps
+        total_steps = len(sigmas) - 1 + calc_restart_steps(segments)
         step = 0
 
         def callback_wrapper(x):

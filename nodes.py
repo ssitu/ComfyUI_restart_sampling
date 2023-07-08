@@ -32,7 +32,7 @@ class KRestartSampler:
                 "latent_image": ("LATENT", ),
                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "segments": ("STRING", {"default": "[3,2,0.06,0.30],[3,1,0.30,0.59]", "multiline": False}),
-                "restart_scheduler": (get_supported_restart_schedulers(), {"default": "karras"}),
+                # "restart_scheduler": (get_supported_restart_schedulers(), {"default": "karras"}),
             }
         }
 
@@ -41,7 +41,7 @@ class KRestartSampler:
     CATEGORY = "sampling"
 
     def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, segments, restart_scheduler):
-        return restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, segments, restart_scheduler)
+        return restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, segments, scheduler)
 
 
 NODE_CLASS_MAPPINGS = {

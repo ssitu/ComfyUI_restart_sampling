@@ -1,6 +1,5 @@
 import torch
 from comfy.k_diffusion import sampling as k_diffusion_sampling
-import warnings
 
 
 def get_sigmas_karras(model, n, s_min, s_max, device):

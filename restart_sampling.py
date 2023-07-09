@@ -3,6 +3,8 @@ import torch
 from tqdm.auto import trange
 from nodes import common_ksampler
 from comfy.k_diffusion import sampling as k_diffusion_sampling
+from comfy.samplers import CompVisVDenoiser
+from comfy.ldm.models.diffusion.ddim import DDIMSampler
 from comfy.utils import ProgressBar
 from .restart_schedulers import SCHEDULER_MAPPING
 
@@ -37,8 +39,26 @@ def round_restart_segments(sigmas, restart_segments):
     return t_min_mapping
 
 
+def segments_to_timesteps(restart_segments, model):
+    timesteps = []
+    for segment in restart_segments:
+        t_min, t_max = model.sigma_to_t(torch.tensor(
+            [segment['t_min'], segment['t_max']], device=model.log_sigmas.device))
+        ts_segment = {'n': segment['n'], 'k': segment['k'], 't_min': t_min, 't_max': t_max}
+        timesteps.append(ts_segment)
+    return timesteps
+
+
+def round_restart_segments_timesteps(timesteps, restart_segments):
+    t_min_mapping = {}
+    for segment in reversed(restart_segments):  # Reversed to prioritize segments to the front
+        t_min_neighbor = min(timesteps, key=lambda ts: abs(ts - segment['t_min'])).item()
+        t_min_mapping[t_min_neighbor] = {'n': segment['n'], 'k': segment['k'], 't_max': segment['t_max']}
+    return t_min_mapping
+
+
 def calc_sigmas(scheduler, n, sigma_min, sigma_max, model, device):
-    return SCHEDULER_MAPPING[scheduler](model.inner_model, n, sigma_min, sigma_max, device)
+    return SCHEDULER_MAPPING[scheduler](model, n, sigma_min, sigma_max, device)
 
 
 def calc_restart_steps(restart_segments):
@@ -48,55 +68,27 @@ def calc_restart_steps(restart_segments):
     return restart_steps
 
 
-total_steps = 0
+_total_steps = 0
+_restart_segments = None
+_restart_scheduler = None
 
 
 def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, restart_info, restart_scheduler):
-    sample_func_name = "sample_{}".format(sampler_name)
-    sampler = getattr(k_diffusion_sampling, sample_func_name)
-    restart_segments = prepare_restart_segments(restart_info)
-    global total_steps
-    total_steps = steps
+    global _total_steps, _restart_segments, _restart_scheduler
+    _restart_scheduler = restart_scheduler
+    _restart_segments = prepare_restart_segments(restart_info)
 
-    @torch.no_grad()
-    def restart_wrapper(model, x, sigmas, extra_args=None, callback=None, disable=None):
-        extra_args = {} if extra_args is None else extra_args
-        segments = round_restart_segments(sigmas, restart_segments)
-        global total_steps
-        total_steps = len(sigmas) - 1 + calc_restart_steps(segments)
-        step = 0
-
-        def callback_wrapper(x):
-            x["i"] = step
-            if callback is not None:
-                callback(x)
-
-        with trange(total_steps, disable=disable) as pbar:
-            for i in range(len(sigmas) - 1):
-                x = sampler(model, x, torch.tensor([sigmas[i], sigmas[i + 1]],
-                            device=x.device), extra_args, callback_wrapper, True)
-                pbar.update(1)
-                step += 1
-                if sigmas[i + 1].item() in segments:
-                    seg = segments[sigmas[i + 1].item()]
-                    s_min, s_max, k, n_restart = sigmas[i + 1], seg['t_max'], seg['k'], seg['n']
-                    seg_sigmas = calc_sigmas(restart_scheduler, n_restart, s_min, s_max, model, device=x.device)
-                    for _ in range(k):
-                        x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
-                        for j in range(n_restart - 1):
-                            x = sampler(model, x, torch.tensor(
-                                [seg_sigmas[j], seg_sigmas[j + 1]], device=x.device), extra_args, callback_wrapper, True)
-                            pbar.update(1)
-                            step += 1
-        return x
-
-    setattr(k_diffusion_sampling, sample_func_name, restart_wrapper)
+    match sampler_name:
+        case "ddim":
+            sampler_wrapper = DDIMWrapper()
+        case _:
+            sampler_wrapper = KSamplerRestartWrapper(sampler_name)
 
     # Add the additional steps to the progress bar
     pbar_update_absolute = ProgressBar.update_absolute
 
     def pbar_update_absolute_wrapper(self, value, total=None, preview=None):
-        pbar_update_absolute(self, value, total_steps, preview)
+        pbar_update_absolute(self, value, _total_steps, preview)
 
     ProgressBar.update_absolute = pbar_update_absolute_wrapper
 
@@ -104,6 +96,124 @@ def restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive,
         samples = common_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
                                   positive, negative, latent_image, denoise=denoise)
     finally:
-        setattr(k_diffusion_sampling, sample_func_name, sampler)
+        sampler_wrapper.cleanup()
         ProgressBar.update_absolute = pbar_update_absolute
     return samples
+
+
+class RestartWrapper:
+
+    def cleanup(self):
+        pass
+
+
+class KSamplerRestartWrapper(RestartWrapper):
+
+    ksampler = None
+
+    def __init__(self, sampler_name):
+        self.sample_func_name = "sample_{}".format(sampler_name)
+        self.__class__.ksampler = getattr(k_diffusion_sampling, self.sample_func_name)
+        setattr(k_diffusion_sampling, self.sample_func_name, self.ksampler_restart_wrapper)
+
+    def cleanup(self):
+        setattr(k_diffusion_sampling, self.sample_func_name, KSamplerRestartWrapper.ksampler)
+
+    @staticmethod
+    @torch.no_grad()
+    def ksampler_restart_wrapper(model, x, sigmas, extra_args=None, callback=None, disable=None):
+        global _total_steps, _restart_segments, _restart_scheduler
+        ksampler = __class__.ksampler
+        segments = round_restart_segments(sigmas, _restart_segments)
+        _total_steps = len(sigmas) - 1 + calc_restart_steps(segments)
+        step = 0
+
+        def callback_wrapper(x):
+            x["i"] = step
+            if callback is not None:
+                callback(x)
+
+        with trange(_total_steps, disable=disable) as pbar:
+            for i in range(len(sigmas) - 1):
+                x = ksampler(model, x, torch.tensor([sigmas[i], sigmas[i + 1]],
+                                                    device=x.device), extra_args, callback_wrapper, True)
+                pbar.update(1)
+                step += 1
+                if sigmas[i + 1].item() in segments:
+                    seg = segments[sigmas[i + 1].item()]
+                    s_min, s_max, k, n_restart = sigmas[i + 1], seg['t_max'], seg['k'], seg['n']
+                    seg_sigmas = calc_sigmas(_restart_scheduler, n_restart, s_min,
+                                             s_max, model.inner_model, device=x.device)
+                    for _ in range(k):
+                        x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
+                        for j in range(n_restart - 1):
+                            x = ksampler(model, x, torch.tensor(
+                                [seg_sigmas[j], seg_sigmas[j + 1]], device=x.device), extra_args, callback_wrapper, True)
+                            pbar.update(1)
+                            step += 1
+        return x
+
+
+class DDIMWrapper(RestartWrapper):
+
+    def __init__(self):
+        self.__class__.sample_custom = DDIMSampler.sample_custom
+        DDIMSampler.sample_custom = self.ddim_wrapper
+
+    def cleanup(self):
+        DDIMSampler.sample_custom = self.__class__.sample_custom
+
+    @staticmethod
+    @torch.no_grad()
+    def ddim_wrapper(self, ddim_timesteps, conditioning, callback=None, img_callback=None, quantize_x0=False,
+                     eta=0., mask=None, x0=None, temperature=1., noise_dropout=0., score_corrector=None,
+                     corrector_kwargs=None, verbose=True, x_T=None, log_every_t=100, unconditional_guidance_scale=1.,
+                     unconditional_conditioning=None, dynamic_threshold=None, ucg_schedule=None, denoise_function=None,
+                     extra_args=None, to_zero=True, end_step=None, disable_pbar=False, **kwargs):
+        global _total_steps, _restart_segments, _restart_scheduler
+        ddim_sampler = __class__.sample_custom
+        model_denoise = CompVisVDenoiser(self.model)
+        segments = segments_to_timesteps(_restart_segments, model_denoise)
+        segments = round_restart_segments_timesteps(ddim_timesteps, segments)
+        _total_steps = len(ddim_timesteps) - 1 + calc_restart_steps(segments)
+        step = 0
+
+        def callback_wrapper(pred_x0, i):
+            img_callback(pred_x0, step)
+
+        def ddim_simplified(x, timesteps, x_T=None, disable_pbar=False):
+            if x_T is None:
+                self.make_schedule_timesteps(ddim_timesteps=timesteps, verbose=False)
+                x_T = self.stochastic_encode(x, torch.tensor(
+                    [len(timesteps) - 1] * x.shape[0]).to(self.device), noise=torch.zeros_like(x), max_denoise=False)
+            x, intermediates = ddim_sampler(
+                self, timesteps, conditioning, callback=callback, img_callback=callback_wrapper, quantize_x0=quantize_x0,
+                eta=eta, mask=mask, x0=x, temperature=temperature, noise_dropout=noise_dropout, score_corrector=score_corrector,
+                corrector_kwargs=corrector_kwargs, verbose=verbose, x_T=x_T, log_every_t=log_every_t,
+                unconditional_guidance_scale=unconditional_guidance_scale, unconditional_conditioning=unconditional_conditioning,
+                dynamic_threshold=dynamic_threshold, ucg_schedule=ucg_schedule, denoise_function=denoise_function, extra_args=extra_args,
+                to_zero=timesteps[0].item() == 0, end_step=len(timesteps) - 1, disable_pbar=disable_pbar
+            )
+            return x, intermediates
+
+        with trange(_total_steps, disable=disable_pbar) as pbar:
+            for i in reversed(range(len(ddim_timesteps) - 1)):
+                x0, intermediates = ddim_simplified(x0, ddim_timesteps[i:i + 2], x_T=x_T, disable_pbar=True)
+                x_T = None
+                pbar.update(1)
+                step += 1
+                if ddim_timesteps[i].item() in segments:
+                    seg = segments[ddim_timesteps[i].item()]
+                    t_min, t_max, k, n_restart = ddim_timesteps[i], seg['t_max'], seg['k'], seg['n']
+                    s_min, s_max = model_denoise.t_to_sigma(t_min), model_denoise.t_to_sigma(t_max)
+                    seg_sigmas = calc_sigmas(_restart_scheduler, n_restart, s_min,
+                                             s_max, model_denoise, device=x0.device)
+                    for _ in range(k):
+                        x0 += torch.randn_like(x0) * (s_max ** 2 - s_min ** 2) ** 0.5
+                        for j in range(n_restart - 1):
+                            seg_ts = model_denoise.sigma_to_t(seg_sigmas[j]).to(torch.int32)
+                            seg_ts_next = model_denoise.sigma_to_t(seg_sigmas[j + 1]).to(torch.int32)
+                            x0, intermediates = ddim_simplified(x0, [seg_ts_next, seg_ts], disable_pbar=True)
+                            pbar.update(1)
+                            step += 1
+        return x0, intermediates

@@ -4,7 +4,6 @@ from .restart_sampling import restart_sampling, SCHEDULER_MAPPING
 
 def get_supported_samplers():
     samplers = comfy.samplers.KSampler.SAMPLERS.copy()
-    samplers.remove("ddim")
     samplers.remove("dpm_fast")
     samplers.remove("dpm_adaptive")
     samplers.remove("uni_pc")

@@ -4,10 +4,14 @@ from .restart_sampling import restart_sampling, SCHEDULER_MAPPING
 
 def get_supported_samplers():
     samplers = comfy.samplers.KSampler.SAMPLERS.copy()
-    samplers.remove("dpm_fast")
-    samplers.remove("dpm_adaptive")
     samplers.remove("uni_pc")
     samplers.remove("uni_pc_bh2")
+
+    # SDE samplers cannot be used with restarts
+    samplers.remove("dpmpp_sde")
+    samplers.remove("dpmpp_sde_gpu")
+    samplers.remove("dpmpp_2m_sde")
+    samplers.remove("dpmpp_2m_sde_gpu")
     return samplers
 
 
@@ -51,7 +55,7 @@ class KRestartSampler:
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
-                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, ),
+                "sampler_name": (get_supported_samplers(), ),
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
                 "positive": ("CONDITIONING", ),
                 "negative": ("CONDITIONING", ),

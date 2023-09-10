@@ -229,10 +229,11 @@ class DDIMWrapper(RestartWrapper):
         def callback_wrapper(pred_x0, i):
             img_callback(pred_x0, step)
 
-        def ddim_simplified(x, timesteps, disable_pbar=False):
-            self.make_schedule_timesteps(ddim_timesteps=timesteps, verbose=False)
-            x_T = self.stochastic_encode(x, torch.tensor(
-                [len(timesteps) - 1] * x.shape[0]).to(self.device), noise=torch.zeros_like(x), max_denoise=False)
+        def ddim_simplified(x, timesteps, x_T=None, disable_pbar=False):
+            if x_T is None:
+                self.make_schedule_timesteps(ddim_timesteps=timesteps, verbose=False)
+                x_T = self.stochastic_encode(x, torch.tensor(
+                    [len(timesteps) - 1] * x.shape[0]).to(self.device), noise=torch.zeros_like(x), max_denoise=False)
             x, intermediates = ddim_sampler(
                 self, timesteps, conditioning, callback=callback, img_callback=callback_wrapper, quantize_x0=quantize_x0,
                 eta=eta, mask=mask, x0=x, temperature=temperature, noise_dropout=noise_dropout, score_corrector=score_corrector,
@@ -245,7 +246,8 @@ class DDIMWrapper(RestartWrapper):
 
         with trange(_total_steps, disable=disable_pbar) as pbar:
             for i in reversed(range(len(ddim_timesteps) - 1)):
-                x0, intermediates = ddim_simplified(x0, ddim_timesteps[i:i + 2], disable_pbar=True)
+                x0, intermediates = ddim_simplified(x0, ddim_timesteps[i:i + 2], x_T=x_T, disable_pbar=True)
+                x_T = None
                 pbar.update(1)
                 step += 1
                 if ddim_timesteps[i].item() in segments:

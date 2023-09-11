@@ -28,6 +28,7 @@ def prepare_restart_segments(restart_info):
         if len(arr) != 4:
             raise ValueError("Restart segment must have 4 values")
         n_restart, k, t_min, t_max = arr
+        n_restart, k = int(n_restart), int(k)
         restart_segments = add_restart_segment(restart_segments, n_restart, k, t_min, t_max)
     return restart_segments
 

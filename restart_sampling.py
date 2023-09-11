@@ -53,13 +53,17 @@ def round_restart_segments(ts, restart_segments):
     t_min_mapping = {}
     for segment in reversed(restart_segments):  # Reversed to prioritize segments to the front
         t_min_neighbor = min(ts, key=lambda ts: abs(ts - segment['t_min'])).item()
+        if t_min_neighbor == ts[0]:
+            warnings.warn(
+                f"\n[Restart Sampling] nearest neighbor of segment t_min {segment['t_min']:.4f} is equal to the first t_min in the denoise schedule {ts[0]:.4f}, ignoring segment...", stacklevel=2)
+            continue
         if t_min_neighbor > segment['t_max']:
             warnings.warn(
-                f"\n[Restart Sampling] t_min neighbor {t_min_neighbor} is greater than t_max {segment['t_max']}, ignoring segment...", stacklevel=2)
+                f"\n[Restart Sampling] t_min neighbor {t_min_neighbor:.4f} is greater than t_max {segment['t_max']:.4f}, ignoring segment...", stacklevel=2)
             continue
         if t_min_neighbor in t_min_mapping:
             warnings.warn(
-                f"\n[Restart Sampling] Overwriting segment {t_min_mapping[t_min_neighbor]}, nearest neighbor of {segment['t_min']} is {t_min_neighbor}", stacklevel=2)
+                f"\n[Restart Sampling] Overwriting segment {t_min_mapping[t_min_neighbor]:.4f}, nearest neighbor of {segment['t_min']:.4f} is {t_min_neighbor}", stacklevel=2)
         t_min_mapping[t_min_neighbor] = {'n': segment['n'], 'k': segment['k'], 't_max': segment['t_max']}
     return t_min_mapping
 
@@ -181,7 +185,6 @@ class KSamplerRestartWrapper(RestartWrapper):
             x["i"] = step
             if callback is not None:
                 callback(x)
-
         with trange(_total_steps, disable=disable) as pbar:
             for i in range(len(sigmas) - 1):
                 x = ksampler(model, x, torch.tensor([sigmas[i], sigmas[i + 1]],

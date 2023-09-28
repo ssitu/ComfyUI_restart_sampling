@@ -217,7 +217,7 @@ class DDIMWrapper(RestartWrapper):
 
     @staticmethod
     @torch.no_grad()
-    def ddim_wrapper(self, ddim_timesteps, conditioning, callback=None, img_callback=None, quantize_x0=False,
+    def ddim_wrapper(self, ddim_timesteps, conditioning=None, callback=None, img_callback=None, quantize_x0=False,
                      eta=0., mask=None, x0=None, temperature=1., noise_dropout=0., score_corrector=None,
                      corrector_kwargs=None, verbose=True, x_T=None, log_every_t=100, unconditional_guidance_scale=1.,
                      unconditional_conditioning=None, dynamic_threshold=None, ucg_schedule=None, denoise_function=None,

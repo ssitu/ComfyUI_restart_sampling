@@ -14,6 +14,10 @@ def get_supported_samplers():
     samplers.remove("dpmpp_2m_sde_gpu")
     samplers.remove("dpmpp_3m_sde")
     samplers.remove("dpmpp_3m_sde_gpu")
+
+    # DPM fast and adaptive go by their own schedules, restarts could be done but it won't follow the algorithm described in the paper.
+    samplers.remove("dpm_fast")
+    samplers.remove("dpm_adaptive")
     return samplers
 
 

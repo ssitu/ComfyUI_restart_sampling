@@ -69,38 +69,36 @@ def calc_restart_steps(restart_segments):
     return restart_steps
 
 
-def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, start_step=None, last_step=None, force_full_denoise=False, output_only=True):
-    total_steps = [0]
-    restart_segments = prepare_restart_segments(restart_info)
-
+def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, step_range=None, force_full_denoise=False, output_only=True):
     if isinstance(sampler, str):
         sampler = sampler_object(sampler)
 
-    # Add the additional steps to the progress bar
-    pbar_update_absolute = ProgressBar.update_absolute
-
-    def pbar_update_absolute_wrapper(self, value, total=None, preview=None):
-        pbar_update_absolute(self, value, total_steps[0], preview)
-
-    ProgressBar.update_absolute = pbar_update_absolute_wrapper
+    restart_segments = prepare_restart_segments(restart_info)
 
     comfy.model_management.load_models_gpu([model])
     real_model = model
     while hasattr(real_model, "model"):
         real_model = real_model.model
-    sigmas = calc_sigmas(scheduler, steps,
+
+    effective_steps = steps if step_range is not None or denoise > 0.9999 else int(steps / denoise)
+    sigmas = calc_sigmas(scheduler, effective_steps,
         float(real_model.model_sampling.sigma_min), float(real_model.model_sampling.sigma_max),
         real_model, model.load_device,
     )
+    if step_range is not None:
+        start_step, last_step = step_range
 
-    if last_step is not None and last_step < (len(sigmas) - 1):
-        sigmas = sigmas[:last_step + 1]
-        if force_full_denoise:
-            sigmas[-1] = 0
+        if last_step < (len(sigmas) - 1):
+            sigmas = sigmas[:last_step + 1]
+            if force_full_denoise:
+                sigmas[-1] = 0
 
-    if start_step is not None and start_step < (len(sigmas) - 1):
-        sigmas = sigmas[start_step:]
+        if start_step < (len(sigmas) - 1):
+            sigmas = sigmas[start_step:]
+    elif effective_steps != steps:
+        sigmas = sigmas[-(steps + 1):]
 
+    total_steps = [0] # Updated in the wrapper.
     sampler_wrapper = KSamplerRestartWrapper(sampler, real_model, restart_scheduler, restart_segments, total_steps)
 
     latent = latent_image
@@ -125,6 +123,15 @@ def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, nega
         sampler_wrapper.ksampler_restart_wrapper, extra_options=sampler.extra_options | {},
         inpaint_options=sampler.inpaint_options | {},
     )
+
+
+    # Add the additional steps to the progress bar
+    pbar_update_absolute = ProgressBar.update_absolute
+
+    def pbar_update_absolute_wrapper(self, value, total=None, preview=None):
+        pbar_update_absolute(self, value, total_steps[0], preview)
+
+    ProgressBar.update_absolute = pbar_update_absolute_wrapper
 
     try:
         samples = sample_custom(

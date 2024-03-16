@@ -87,7 +87,7 @@ def calc_restart_steps(restart_segments):
     return restart_steps
 
 
-def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, step_range=None, force_full_denoise=False, output_only=True):
+def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, step_range=None, force_full_denoise=False, output_only=True, custom_noise=None):
     if isinstance(sampler, str):
         sampler = sampler_object(sampler)
 
@@ -118,7 +118,7 @@ def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, nega
         sigmas = sigmas[-(steps + 1):]
 
     total_steps = [0] # Updated in the wrapper.
-    sampler_wrapper = KSamplerRestartWrapper(sampler, real_model, restart_scheduler, restart_segments, total_steps)
+    sampler_wrapper = KSamplerRestartWrapper(sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise)
 
     latent = latent_image
     latent_image = latent["samples"]
@@ -178,16 +178,19 @@ class KSamplerRestartWrapper:
 
     ksampler = None
 
-    def __init__(self, sampler, real_model, restart_scheduler, restart_segments, total_steps):
+    def __init__(self, sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise):
         self.ksampler = sampler
         self.real_model = real_model
         self.restart_scheduler = restart_scheduler
         self.restart_segments = restart_segments
         self.total_steps = total_steps
+        self.seed = seed
+        self.custom_noise = custom_noise
 
     @torch.no_grad()
     def ksampler_restart_wrapper(self, model, x, sigmas, *args, extra_args=None, callback=None, disable=None, **kwargs):
         ksampler = self.ksampler
+        noise_sampler = lambda _s, _sn: torch.randn_like(x)
         segments = round_restart_segments(sigmas, self.restart_segments)
         self.total_steps[0] = len(sigmas) - 1 + calc_restart_steps(segments)
         step = 0
@@ -211,8 +214,10 @@ class KSamplerRestartWrapper:
                 s_max, k, n_restart = seg['t_max'], seg['k'], seg['n']
                 seg_sigmas = calc_sigmas(self.restart_scheduler, n_restart, s_min,
                                          s_max, self.real_model, device=x.device)
+                if self.custom_noise is not None:
+                    noise_sampler = self.custom_noise.make_noise_sampler(x, s_min, s_max, self.seed)
                 for _ in range(k):
-                    x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
+                    x += noise_sampler(None, None) * (s_max ** 2 - s_min ** 2) ** 0.5
                     for j in range(n_restart - 1):
                         x = ksampler.sampler_function(model, x, torch.tensor(
                             [seg_sigmas[j], seg_sigmas[j + 1]], device=x.device), *args, extra_args=extra_args,

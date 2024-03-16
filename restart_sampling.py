@@ -93,12 +93,12 @@ def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, nega
         real_model, model.load_device,
     )
 
-    if last_step < (len(sigmas) - 1):
+    if last_step is not None and last_step < (len(sigmas) - 1):
         sigmas = sigmas[:last_step + 1]
         if force_full_denoise:
             sigmas[-1] = 0
 
-    if start_step < (len(sigmas) - 1):
+    if start_step is not None and start_step < (len(sigmas) - 1):
         sigmas = sigmas[start_step:]
 
     sampler_wrapper = KSamplerRestartWrapper(sampler, real_model, restart_scheduler, restart_segments, total_steps)

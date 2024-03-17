@@ -208,7 +208,6 @@ class KSamplerRestartWrapper:
                 seg = segments.get(s_min)
                 if seg is None:
                     continue
-                seg = segments[s_min]
                 s_max, k, n_restart = seg['t_max'], seg['k'], seg['n']
                 seg_sigmas = calc_sigmas(self.restart_scheduler, n_restart, s_min,
                                          s_max, self.real_model, device=x.device)

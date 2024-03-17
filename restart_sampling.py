@@ -17,7 +17,23 @@ def add_restart_segment(restart_segments, n_restart, k, t_min, t_max):
     return restart_segments
 
 
-def prepare_restart_segments(restart_info):
+def resolve_t_value(val, ms):
+    if isinstance(val, (float, int)):
+        if val >= 0.0:
+            return val
+        if val >= -1000:
+            return ms.sigma(torch.FloatTensor([abs(int(val))], device="cpu")).item()
+    if isinstance(val, str) and val.endswith("%"):
+        try:
+            val = float(val[:-1])
+            if val >= 0 and val <= 100:
+                return ms.percent_to_sigma(1.0 - val / 100.0)
+        except ValueError:
+            pass
+    raise ValueError("bad t_min or t_max value")
+
+
+def prepare_restart_segments(restart_info, ms):
     try:
         restart_arrays = ast.literal_eval(f"[{restart_info}]")
     except SyntaxError as e:
@@ -27,8 +43,10 @@ def prepare_restart_segments(restart_info):
     for arr in restart_arrays:
         if len(arr) != 4:
             raise ValueError("Restart segment must have 4 values")
-        n_restart, k, t_min, t_max = arr
+        n_restart, k, val_min, val_max = arr
         n_restart, k = int(n_restart), int(k)
+        t_min = resolve_t_value(val_min, ms)
+        t_max = resolve_t_value(val_max, ms)
         restart_segments = add_restart_segment(restart_segments, n_restart, k, t_min, t_max)
     return restart_segments
 
@@ -73,12 +91,13 @@ def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, nega
     if isinstance(sampler, str):
         sampler = sampler_object(sampler)
 
-    restart_segments = prepare_restart_segments(restart_info)
 
     comfy.model_management.load_models_gpu([model])
     real_model = model
     while hasattr(real_model, "model"):
         real_model = real_model.model
+
+    restart_segments = prepare_restart_segments(restart_info, real_model.model_sampling)
 
     effective_steps = steps if step_range is not None or denoise > 0.9999 else int(steps / denoise)
     sigmas = calc_sigmas(scheduler, effective_steps,
@@ -185,17 +204,20 @@ class KSamplerRestartWrapper:
                     **kwargs)
                 pbar.update(1)
                 step += 1
-                if sigmas[i + 1].item() in segments:
-                    seg = segments[sigmas[i + 1].item()]
-                    s_min, s_max, k, n_restart = sigmas[i + 1], seg['t_max'], seg['k'], seg['n']
-                    seg_sigmas = calc_sigmas(self.restart_scheduler, n_restart, s_min,
-                                             s_max, self.real_model, device=x.device)
-                    for _ in range(k):
-                        x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
-                        for j in range(n_restart - 1):
-                            x = ksampler.sampler_function(model, x, torch.tensor(
-                                [seg_sigmas[j], seg_sigmas[j + 1]], device=x.device), *args, extra_args=extra_args,
-                                callback=callback_wrapper, disable=True, **kwargs)
-                            pbar.update(1)
-                            step += 1
+                s_min = sigmas[i + 1].item()
+                seg = segments.get(s_min)
+                if seg is None:
+                    continue
+                seg = segments[s_min]
+                s_max, k, n_restart = seg['t_max'], seg['k'], seg['n']
+                seg_sigmas = calc_sigmas(self.restart_scheduler, n_restart, s_min,
+                                         s_max, self.real_model, device=x.device)
+                for _ in range(k):
+                    x += torch.randn_like(x) * (s_max ** 2 - s_min ** 2) ** 0.5
+                    for j in range(n_restart - 1):
+                        x = ksampler.sampler_function(model, x, torch.tensor(
+                            [seg_sigmas[j], seg_sigmas[j + 1]], device=x.device), *args, extra_args=extra_args,
+                            callback=callback_wrapper, disable=True, **kwargs)
+                        pbar.update(1)
+                        step += 1
         return x

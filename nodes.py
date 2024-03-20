@@ -64,7 +64,7 @@ class KRestartSampler:
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                 "sampler_name": (get_supported_samplers(), ),
-                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
+                "scheduler": (tuple(SCHEDULER_MAPPING.keys()), ),
                 "positive": ("CONDITIONING", ),
                 "negative": ("CONDITIONING", ),
                 "latent_image": ("LATENT", ),
@@ -94,7 +94,7 @@ class KRestartSamplerAdv:
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                 "sampler_name": (get_supported_samplers(), ),
-                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
+                "scheduler": (tuple(SCHEDULER_MAPPING.keys()), ),
                 "positive": ("CONDITIONING", ),
                 "negative": ("CONDITIONING", ),
                 "latent_image": ("LATENT", ),
@@ -111,23 +111,56 @@ class KRestartSamplerAdv:
     CATEGORY = "sampling"
 
     def sample(self, model, add_noise, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, start_at_step, end_at_step, return_with_leftover_noise, segments, restart_scheduler):
-        force_full_denoise = True
-        if return_with_leftover_noise == "enable":
-            force_full_denoise = False
-        disable_noise = False
-        if add_noise == "disable":
-            disable_noise = True
-        return restart_sampling(model, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, segments, restart_scheduler, disable_noise=disable_noise, start_step=start_at_step, last_step=end_at_step, force_full_denoise=force_full_denoise)
+        force_full_denoise = return_with_leftover_noise != "enable"
+        disable_noise = add_noise == "disable"
+        return restart_sampling(model, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, segments, restart_scheduler, disable_noise=disable_noise, step_range=(start_at_step, end_at_step), force_full_denoise=force_full_denoise)
+
+
+class KRestartSamplerCustom:
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "add_noise": (["enable", "disable"], ),
+                "noise_seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
+                "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
+                "sampler": ("SAMPLER", ),
+                "scheduler": (tuple(SCHEDULER_MAPPING.keys()), ),
+                "positive": ("CONDITIONING", ),
+                "negative": ("CONDITIONING", ),
+                "latent_image": ("LATENT", ),
+                "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
+                "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
+                "return_with_leftover_noise": (["disable", "enable"], ),
+                "segments": ("STRING", {"default": DEFAULT_SEGMENTS, "multiline": False}),
+                "restart_scheduler": (get_supported_restart_schedulers(), ),
+            }
+        }
+
+    RETURN_TYPES = ("LATENT","LATENT")
+    RETURN_NAMES = ("output", "denoised_output")
+    FUNCTION = "sample"
+    CATEGORY = "sampling"
+
+    def sample(self, model, add_noise, noise_seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, start_at_step, end_at_step, return_with_leftover_noise, segments, restart_scheduler):
+        force_full_denoise = return_with_leftover_noise != "enable"
+        disable_noise = add_noise == "disable"
+        return restart_sampling(model, noise_seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, segments, restart_scheduler, disable_noise=disable_noise, step_range=(start_at_step, end_at_step), force_full_denoise=force_full_denoise, output_only=False)
 
 
 NODE_CLASS_MAPPINGS = {
     "KRestartSamplerSimple": KRestartSamplerSimple,
     "KRestartSampler": KRestartSampler,
     "KRestartSamplerAdv": KRestartSamplerAdv,
+    "KRestartSamplerCustom": KRestartSamplerCustom,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "KRestartSamplerSimple": "KSampler With Restarts (Simple)",
     "KRestartSampler": "KSampler With Restarts",
     "KRestartSamplerAdv": "KSampler With Restarts (Advanced)",
+    "KRestartSamplerCustom": "KSampler With Restarts (Custom)",
 }

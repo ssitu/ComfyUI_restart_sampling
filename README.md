@@ -5,6 +5,8 @@ Paper: https://arxiv.org/abs/2306.14878
 
 Repo: https://github.com/Newbeeer/diffusion_restart_sampling
 
+This has been tested for ComfyUI for the following commit: [d14bdb1](https://github.com/comfyanonymous/ComfyUI/commit/d14bdb18967f7413852a364747c49599de537eec)
+
 ## Installation
 
 Enter the following command from the commandline starting in ComfyUI/custom_nodes/

@@ -117,8 +117,7 @@ def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, nega
     elif effective_steps != steps:
         sigmas = sigmas[-(steps + 1):]
 
-    total_steps = [0] # Updated in the wrapper.
-    sampler_wrapper = KSamplerRestartWrapper(sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise, chunked=chunked_mode)
+    sampler_wrapper = KSamplerRestartWrapper(sampler, real_model, restart_scheduler, restart_segments, seed, custom_noise, chunked=chunked_mode)
 
     latent = latent_image
     latent_image = latent["samples"]
@@ -148,7 +147,7 @@ def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, nega
     pbar_update_absolute = ProgressBar.update_absolute
 
     def pbar_update_absolute_wrapper(self, value, total=None, preview=None):
-        pbar_update_absolute(self, value, total_steps[0], preview)
+        pbar_update_absolute(self, value, sampler_wrapper.total_steps, preview)
 
     ProgressBar.update_absolute = pbar_update_absolute_wrapper
 
@@ -178,12 +177,12 @@ class KSamplerRestartWrapper:
 
     ksampler = None
 
-    def __init__(self, sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise=None, chunked=True):
+    def __init__(self, sampler, real_model, restart_scheduler, restart_segments, seed, custom_noise=None, chunked=True):
         self.ksampler = sampler
         self.real_model = real_model
         self.restart_scheduler = restart_scheduler
         self.restart_segments = restart_segments
-        self.total_steps = total_steps
+        self.total_steps = 0
         self.seed = seed
         self.custom_noise = custom_noise
         self.chunked = chunked
@@ -191,7 +190,7 @@ class KSamplerRestartWrapper:
     @torch.no_grad()
     def build_plan(self, x, sigmas):
         segments = round_restart_segments(sigmas, self.restart_segments)
-        self.total_steps[0] = len(sigmas) - 1 + calc_restart_steps(segments)
+        self.total_steps = len(sigmas) - 1 + calc_restart_steps(segments)
         plan = []
         range_start = -1
         for i in range(len(sigmas) - 1):
@@ -218,7 +217,7 @@ class KSamplerRestartWrapper:
         plan = self.build_plan(x, sigmas)
         step = 0
 
-        with trange(self.total_steps[0], disable=disable) as pbar:
+        with trange(self.total_steps, disable=disable) as pbar:
             def callback_wrapper(x):
                 nonlocal step
                 step += 1

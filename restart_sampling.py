@@ -87,7 +87,7 @@ def calc_restart_steps(restart_segments):
     return restart_steps
 
 
-def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, step_range=None, force_full_denoise=False, output_only=True, custom_noise=None):
+def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, step_range=None, force_full_denoise=False, output_only=True, custom_noise=None, noise_multiplier=1.0):
     if isinstance(sampler, str):
         sampler = sampler_object(sampler)
 
@@ -178,7 +178,7 @@ class KSamplerRestartWrapper:
 
     ksampler = None
 
-    def __init__(self, sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise):
+    def __init__(self, sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise=None):
         self.ksampler = sampler
         self.real_model = real_model
         self.restart_scheduler = restart_scheduler
@@ -190,7 +190,8 @@ class KSamplerRestartWrapper:
     @torch.no_grad()
     def ksampler_restart_wrapper(self, model, x, sigmas, *args, extra_args=None, callback=None, disable=None, **kwargs):
         ksampler = self.ksampler
-        noise_sampler = lambda _s, _sn: torch.randn_like(x)
+        def noise_sampler(_s, _sn):
+            return torch.randn_like(x)
         segments = round_restart_segments(sigmas, self.restart_segments)
         self.total_steps[0] = len(sigmas) - 1 + calc_restart_steps(segments)
         step = 0
@@ -217,7 +218,7 @@ class KSamplerRestartWrapper:
                 if self.custom_noise is not None:
                     noise_sampler = self.custom_noise.make_noise_sampler(x, s_min, s_max, self.seed)
                 for _ in range(k):
-                    x += noise_sampler(None, None) * (s_max ** 2 - s_min ** 2) ** 0.5
+                    x += noise_sampler(seg_sigmas[0],seg_sigmas[-1]) * (s_max ** 2 - s_min ** 2) ** 0.5
                     for j in range(n_restart - 1):
                         x = ksampler.sampler_function(model, x, torch.tensor(
                             [seg_sigmas[j], seg_sigmas[j + 1]], device=x.device), *args, extra_args=extra_args,

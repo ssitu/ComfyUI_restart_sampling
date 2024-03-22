@@ -87,7 +87,7 @@ def calc_restart_steps(restart_segments):
     return restart_steps
 
 
-def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, step_range=None, force_full_denoise=False, output_only=True, custom_noise=None, noise_multiplier=1.0):
+def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, step_range=None, force_full_denoise=False, output_only=True, custom_noise=None, noise_multiplier=1.0, chunked_mode=False):
     if isinstance(sampler, str):
         sampler = sampler_object(sampler)
 
@@ -118,7 +118,7 @@ def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, nega
         sigmas = sigmas[-(steps + 1):]
 
     total_steps = [0] # Updated in the wrapper.
-    sampler_wrapper = KSamplerRestartWrapper(sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise)
+    sampler_wrapper = KSamplerRestartWrapper(sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise, chunked=chunked_mode)
 
     latent = latent_image
     latent_image = latent["samples"]
@@ -178,7 +178,7 @@ class KSamplerRestartWrapper:
 
     ksampler = None
 
-    def __init__(self, sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise=None):
+    def __init__(self, sampler, real_model, restart_scheduler, restart_segments, total_steps, seed, custom_noise=None, chunked=True):
         self.ksampler = sampler
         self.real_model = real_model
         self.restart_scheduler = restart_scheduler
@@ -186,43 +186,66 @@ class KSamplerRestartWrapper:
         self.total_steps = total_steps
         self.seed = seed
         self.custom_noise = custom_noise
+        self.chunked = chunked
+
+    @torch.no_grad()
+    def build_plan(self, x, sigmas):
+        segments = round_restart_segments(sigmas, self.restart_segments)
+        self.total_steps[0] = len(sigmas) - 1 + calc_restart_steps(segments)
+        plan = []
+        range_start = -1
+        for i in range(len(sigmas) - 1):
+            if range_start == -1:
+                range_start = i
+            s_min = sigmas[i + 1].item()
+            seg = segments.get(s_min)
+            if seg is None:
+                continue
+            s_max, k, n_restart = seg['t_max'], seg['k'], seg['n']
+            seg_sigmas = calc_sigmas(self.restart_scheduler, n_restart, s_min,
+                                     s_max, self.real_model, device=x.device)
+            plan.append((sigmas[range_start:i+2], k, s_min, s_max, seg_sigmas[:-1]))
+            range_start = -1
+        if range_start != -1:
+            plan.append((sigmas[range_start:], 0, 0, 0, None))
+        return plan
 
     @torch.no_grad()
     def ksampler_restart_wrapper(self, model, x, sigmas, *args, extra_args=None, callback=None, disable=None, **kwargs):
         ksampler = self.ksampler
         def noise_sampler(_s, _sn):
             return torch.randn_like(x)
-        segments = round_restart_segments(sigmas, self.restart_segments)
-        self.total_steps[0] = len(sigmas) - 1 + calc_restart_steps(segments)
+        plan = self.build_plan(x, sigmas)
         step = 0
 
-        def callback_wrapper(x):
-            x["i"] = step
-            if callback is not None:
-                callback(x)
         with trange(self.total_steps[0], disable=disable) as pbar:
-            for i in range(len(sigmas) - 1):
-                x = ksampler.sampler_function(
-                    model, x, torch.tensor([sigmas[i], sigmas[i + 1]],
-                    device=x.device), *args, extra_args=extra_args, callback=callback_wrapper, disable=True,
-                    **kwargs)
-                pbar.update(1)
+            def callback_wrapper(x):
+                nonlocal step
                 step += 1
-                s_min = sigmas[i + 1].item()
-                seg = segments.get(s_min)
-                if seg is None:
+                pbar.update(1)
+                x["i"] = step
+                if callback is not None:
+                    callback(x)
+
+            def do_sample(x, sigs):
+                if isinstance(sigs, (list,tuple)):
+                    sigs = torch.tensor(sigs, device=x.device)
+                if self.chunked or len(sigs) < 3:
+                    return ksampler.sampler_function(
+                                model, x, sigs, *args, extra_args=extra_args, callback=callback_wrapper, disable=True,
+                                **kwargs)
+                for i in range(len(sigs)-1):
+                    x = do_sample(x, (sigs[i], sigs[i+1])) # This only ever recurses once.
+                return x
+
+            for chunk_sigmas, k, s_min, s_max, restart_sigmas in plan:
+                x = do_sample(x, chunk_sigmas)
+                if restart_sigmas is None:
                     continue
-                s_max, k, n_restart = seg['t_max'], seg['k'], seg['n']
-                seg_sigmas = calc_sigmas(self.restart_scheduler, n_restart, s_min,
-                                         s_max, self.real_model, device=x.device)
                 if self.custom_noise is not None:
                     noise_sampler = self.custom_noise.make_noise_sampler(x, s_min, s_max, self.seed)
                 for _ in range(k):
-                    x += noise_sampler(seg_sigmas[0],seg_sigmas[-1]) * (s_max ** 2 - s_min ** 2) ** 0.5
-                    for j in range(n_restart - 1):
-                        x = ksampler.sampler_function(model, x, torch.tensor(
-                            [seg_sigmas[j], seg_sigmas[j + 1]], device=x.device), *args, extra_args=extra_args,
-                            callback=callback_wrapper, disable=True, **kwargs)
-                        pbar.update(1)
-                        step += 1
+                    x += noise_sampler(restart_sigmas[0], restart_sigmas[-1]) * (s_max ** 2 - s_min ** 2) ** 0.5
+                    x = do_sample(x, restart_sigmas)
+
         return x

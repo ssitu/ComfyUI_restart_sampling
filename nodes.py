@@ -137,7 +137,7 @@ class KRestartSamplerCustom:
                 "return_with_leftover_noise": (["disable", "enable"], ),
                 "segments": ("STRING", {"default": DEFAULT_SEGMENTS, "multiline": False}),
                 "restart_scheduler": (get_supported_restart_schedulers(), ),
-            },
+            }
         }
 
     RETURN_TYPES = ("LATENT","LATENT")
@@ -172,7 +172,7 @@ class KRestartSamplerCustomNoise:
                 "return_with_leftover_noise": (["disable", "enable"], ),
                 "segments": ("STRING", {"default": DEFAULT_SEGMENTS, "multiline": False}),
                 "restart_scheduler": (get_supported_restart_schedulers(),),
-                "chunked_mode": (["disable", "enable"], ),
+                "chunked_mode": ("BOOLEAN", {"default": False}),
             },
             "optional": {
                 "custom_noise_opt": ("SONAR_CUSTOM_NOISE",),
@@ -187,7 +187,7 @@ class KRestartSamplerCustomNoise:
     def sample(self, model, add_noise, noise_seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, start_at_step, end_at_step, return_with_leftover_noise, segments, restart_scheduler, custom_noise_opt=None, chunked_mode="disable"):
         force_full_denoise = return_with_leftover_noise != "enable"
         disable_noise = add_noise == "disable"
-        return restart_sampling(model, noise_seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, segments, restart_scheduler, disable_noise=disable_noise, step_range=(start_at_step, end_at_step), force_full_denoise=force_full_denoise, output_only=False, custom_noise=custom_noise_opt, chunked_mode=chunked_mode=="enable")
+        return restart_sampling(model, noise_seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, segments, restart_scheduler, disable_noise=disable_noise, step_range=(start_at_step, end_at_step), force_full_denoise=force_full_denoise, output_only=False, custom_noise=custom_noise_opt.make_noise_sampler if custom_noise_opt else None, chunked_mode=chunked_mode)
 
 NODE_CLASS_MAPPINGS = {
     "KRestartSamplerSimple": KRestartSamplerSimple,

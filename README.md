@@ -16,6 +16,9 @@ git clone https://github.com/ssitu/ComfyUI_restart_sampling
 
 The Restart sampler nodes can be found in the node menu under `sampling`.
 
+If you set the environment variable `COMFYUI_VERBOSE_RESTART_SAMPLING` to `1`, restart sampling will dump
+information about the steps it's going to run to the console.
+
 ### Nodes
 
 |Node|Image|Description|
@@ -36,6 +39,21 @@ Both $t_{\textrm{min}}$ and $t_{\textrm{max}}$ within a segment definition may b
 * A quoted string percentage value followed by a percent sign (i.e. `"25%"`) — note that this refers to the percentage of sampling, not the percentage of steps that have elapsed.
 
 You may freely mix the different formats. For example, `[2, 2, -500, "10%"], [3, 2, 5.3, -3]` would be a valid sequence. Note: Random numbers used for example only, not recommended.
+
+**Special segment values**:
+
+* Enter `default` to use the default segment list.
+* Enter `a1111` to emulate A1111 WebUI's segment calculation behavior.
+For full emulation, enabled chunked mode, set both schedulers to `karras` and the sampler to `heun`.
+
+### Chunked Mode
+
+When chunked mode is enabled, the sampler is called with as many steps as possible up to the next segment. When disabled, the sampler
+is only called with a single step at a time. Some samplers such as SDE samplers, momentum samplers, second order samplers
+like dpmpp_2m use state from previous steps - when called step-by-step, this state is lost. Using chunked mode may make those
+samplers more accurate.
+
+*Note*: Using SDE or momentum samplers with restart is likely not an improvement over normal sampling.
 
 ## Visual Example
 

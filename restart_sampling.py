@@ -111,7 +111,7 @@ def calc_restart_steps(restart_segments):
     return restart_steps
 
 
-def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, step_range=None, force_full_denoise=False, output_only=True, custom_noise=None, chunked_mode=True):
+def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, restart_info, restart_scheduler, denoise=1.0, disable_noise=False, step_range=None, force_full_denoise=False, output_only=True, custom_noise=None, chunked_mode=True, sigmas=None):
     if isinstance(sampler, str):
         sampler = sampler_object(sampler)
 
@@ -121,10 +121,13 @@ def restart_sampling(model, seed, steps, cfg, sampler, scheduler, positive, nega
         real_model = real_model.model
 
     effective_steps = steps if step_range is not None or denoise > 0.9999 else int(steps / denoise)
-    sigmas = calc_sigmas(scheduler, effective_steps,
-        float(real_model.model_sampling.sigma_min), float(real_model.model_sampling.sigma_max),
-        real_model, model.load_device,
-    )
+    if sigmas is None:
+        sigmas = calc_sigmas(scheduler, effective_steps,
+            float(real_model.model_sampling.sigma_min), float(real_model.model_sampling.sigma_max),
+            real_model, model.load_device,
+        )
+    else:
+        sigmas = sigmas.detach().clone().to(model.load_device)
     if step_range is not None:
         start_step, last_step = step_range
 
@@ -257,6 +260,7 @@ class KSamplerRestartWrapper:
         range_start = -1
         for i in range(len(sigmas) - 1):
             if range_start == -1:
+                # Starting a new plan item - main sigmas start at the current index of i.
                 range_start = i
             s_min = sigmas[i + 1].item()
             seg = segments.get(s_min)
@@ -268,6 +272,7 @@ class KSamplerRestartWrapper:
             plan.append(PlanItem(sigmas[range_start:i+2], k, s_min, s_max, seg_sigmas[:-1]))
             range_start = -1
         if range_start != -1:
+            # Include sigmas after the last restart segments in the plan.
             plan.append(PlanItem(sigmas[range_start:]))
         return plan, total_steps
 

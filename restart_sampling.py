@@ -54,10 +54,10 @@ def prepare_restart_segments(restart_info, ms, sigmas):
             return []
         if steps < 36:
             # Less than 36 steps - one restart with 9 steps.
-            restart_info = "[10,1,0.1,0.2]"
+            restart_info = "[10, 1, 0.1, 2.0]"
         else:
             # Otherwise two restarts with steps // 4 steps.
-            restart_info = f"[{(steps // 4) + 1}, 2, 0.1, 0.2]"
+            restart_info = f"[{(steps // 4) + 1}, 2, 0.1, 2.0]"
     try:
         restart_arrays = ast.literal_eval(f"[{restart_info}]")
     except SyntaxError as e:

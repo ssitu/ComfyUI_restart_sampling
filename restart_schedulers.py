@@ -1,6 +1,8 @@
 import torch
 from comfy.k_diffusion import sampling as k_diffusion_sampling
+
 # from comfy.samplers import normal_scheduler
+
 
 # These two may be wrong for v-pred... but it seems to work?
 # Copied from k_diffusion
@@ -18,6 +20,7 @@ def sigma_to_t(ms, sigma, quantize=True):
     t = (1 - w) * low_idx + w * high_idx
     return t.view(sigma.shape)
 
+
 # Copied from k_diffusion
 def t_to_sigma(ms, t):
     t = t.float()
@@ -25,15 +28,16 @@ def t_to_sigma(ms, t):
     log_sigma = (1 - w) * ms.log_sigmas[low_idx] + w * ms.log_sigmas[high_idx]
     return log_sigma.exp()
 
-def get_sigmas_karras(model, n, s_min, s_max, device):
+
+def get_sigmas_karras(_model, n, s_min, s_max, device):
     return k_diffusion_sampling.get_sigmas_karras(n, s_min, s_max, device=device)
 
 
-def get_sigmas_exponential(model, n, s_min, s_max, device):
+def get_sigmas_exponential(_model, n, s_min, s_max, device):
     return k_diffusion_sampling.get_sigmas_exponential(n, s_min, s_max, device=device)
 
 
-def normal_scheduler(model, steps, s_min, s_max, sgm=False, floor=False):
+def normal_scheduler(model, steps, s_min, s_max, sgm=False):
     """
     Pulled from comfy.samplers.normal_scheduler
     """
@@ -46,7 +50,7 @@ def normal_scheduler(model, steps, s_min, s_max, sgm=False, floor=False):
     else:
         timesteps = torch.linspace(start, end, steps)
 
-    sigs = tuple(ms.sigma(timesteps[x]) for x in range(len(timesteps))) + (0.0,)
+    sigs = (*(ms.sigma(timesteps[x]) for x in range(len(timesteps))), 0.0)
     return torch.FloatTensor(sigs)
 
 
@@ -60,10 +64,12 @@ def get_sigmas_simple(model, n, s_min, s_max, device):
     max_idx = torch.argmin(torch.abs(ms.sigmas - s_max))
     sigmas_slice = ms.sigmas[min_idx:max_idx]
     ss = len(sigmas_slice) / n
-    sigs = [float(s_max)]
-    for x in range(1, n - 1):
-        sigs += [float(sigmas_slice[-(1 + int(x * ss))])]
-    sigs += [float(s_min), 0.0]
+    sigs = (
+        float(s_max),
+        *(float(sigmas_slice[-(1 + int(x * ss))]) for x in range(1, n - 1)),
+        float(s_min),
+        0.0,
+    )
     return torch.tensor(sigs, device=device)
 
 
@@ -71,12 +77,7 @@ def get_sigmas_ddim_uniform(model, n, s_min, s_max, device):
     ms = model.model_sampling
     t_min, t_max = sigma_to_t(ms, torch.tensor([s_min, s_max], device=device))
     ddim_timesteps = torch.linspace(t_max, t_min, n, dtype=torch.int16, device=device)
-    sigs = []
-    for ts in ddim_timesteps:
-        if ts > 999:
-            ts = 999
-        sigs.append(t_to_sigma(ms, ts))
-    sigs += [0.0]
+    sigs = (*(t_to_sigma(ms, min(ts, 999)) for ts in ddim_timesteps), 0.0)
     return torch.tensor(sigs, device=device)
 
 

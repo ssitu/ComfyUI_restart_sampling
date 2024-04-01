@@ -44,6 +44,7 @@ def prepare_restart_segments(restart_info, ms, sigmas):
     if restart_info == "":
         # No restarts.
         return []
+    restart_arrays = None
     if restart_info == "default":
         restart_info = DEFAULT_SEGMENTS
     elif restart_info == "a1111":
@@ -52,17 +53,19 @@ def prepare_restart_segments(restart_info, ms, sigmas):
         if steps < 20:
             # Less than 20 steps - no restarts.
             return []
+        a1111_t_max = sigmas[int(torch.argmin(abs(sigmas - 2.0), dim=0))].item()
         if steps < 36:
             # Less than 36 steps - one restart with 9 steps.
-            restart_info = "[10, 1, 0.1, 2.0]"
+            restart_arrays = [[10, 1, 0.1, a1111_t_max]]
         else:
             # Otherwise two restarts with steps // 4 steps.
-            restart_info = f"[{(steps // 4) + 1}, 2, 0.1, 2.0]"
-    try:
-        restart_arrays = ast.literal_eval(f"[{restart_info}]")
-    except SyntaxError as e:
-        print("Ill-formed restart segments")
-        raise e
+            restart_arrays = [[(steps // 4) + 1, 2, 0.1, a1111_t_max]]
+    if restart_arrays is None:
+        try:
+            restart_arrays = ast.literal_eval(f"[{restart_info}]")
+        except SyntaxError as e:
+            print("Ill-formed restart segments")
+            raise e
     restart_segments = []
     for arr in restart_arrays:
         if len(arr) != 4:
@@ -279,6 +282,8 @@ class KSamplerRestartWrapper:
     # Dumps information about the plan to the console. It uses the normal plan execute
     # logic.
     def explain_plan(self, plan, total_steps):
+        def pretty_sigmas(sigmas):
+            return ", ".join(f"{sig:.4}" for sig in sigmas.tolist())
         print(f"** Dumping restart sampling plan (total steps {total_steps}):")
         step = 0
         last_kidx = -1
@@ -292,11 +297,11 @@ class KSamplerRestartWrapper:
             if not self.chunked:
                 for i in range(len(sigs)-1):
                     step += 1
-                    print(f"[{rlabel}] Step {step:>3}: {sigs[i:i+2]}")
+                    print(f"[{rlabel}] Step {step:>3}: {pretty_sigmas(sigs[i:i+2])}")
                 return x
             chunk_size = len(sigs) - 2
             step += 1
-            print(f"[{rlabel}] Step {step:>3}..{step+chunk_size:<3}: {sigs}")
+            print(f"[{rlabel}] Step {step:>3}..{step+chunk_size:<3}: {pretty_sigmas(sigs)}")
             step += chunk_size
             return x
 

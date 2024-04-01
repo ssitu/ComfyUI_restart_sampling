@@ -1,5 +1,5 @@
 import comfy
-from .restart_sampling import restart_sampling, SCHEDULER_MAPPING
+from .restart_sampling import restart_sampling, SCHEDULER_MAPPING, DEFAULT_SEGMENTS
 
 
 def get_supported_samplers():
@@ -24,8 +24,6 @@ def get_supported_samplers():
 def get_supported_restart_schedulers():
     return list(SCHEDULER_MAPPING.keys())
 
-DEFAULT_SEGMENTS = "[3,2,0.06,0.30],[3,1,0.30,0.59]"
-
 
 class KRestartSamplerSimple:
     @classmethod
@@ -42,7 +40,7 @@ class KRestartSamplerSimple:
                 "negative": ("CONDITIONING", ),
                 "latent_image": ("LATENT", ),
                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "segments": ("STRING", {"default": DEFAULT_SEGMENTS, "multiline": False}),
+                "segments": ("STRING", {"default": "default", "multiline": False}),
             }
         }
 
@@ -71,6 +69,7 @@ class KRestartSampler:
                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "segments": ("STRING", {"default": DEFAULT_SEGMENTS, "multiline": False}),
                 "restart_scheduler": (get_supported_restart_schedulers(), ),
+                "chunked_mode": ("BOOLEAN", {"default": True}),
             }
         }
 
@@ -78,8 +77,8 @@ class KRestartSampler:
     FUNCTION = "sample"
     CATEGORY = "sampling"
 
-    def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, segments, restart_scheduler):
-        return restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, segments, restart_scheduler, denoise=denoise)
+    def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, segments, restart_scheduler, chunked_mode=True):
+        return restart_sampling(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, segments, restart_scheduler, denoise=denoise, chunked_mode=chunked_mode)
 
 
 class KRestartSamplerAdv:
@@ -103,6 +102,7 @@ class KRestartSamplerAdv:
                 "return_with_leftover_noise": (["disable", "enable"], ),
                 "segments": ("STRING", {"default": DEFAULT_SEGMENTS, "multiline": False}),
                 "restart_scheduler": (get_supported_restart_schedulers(), ),
+                "chunked_mode": ("BOOLEAN", {"default": True}),
             }
         }
 
@@ -110,10 +110,10 @@ class KRestartSamplerAdv:
     FUNCTION = "sample"
     CATEGORY = "sampling"
 
-    def sample(self, model, add_noise, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, start_at_step, end_at_step, return_with_leftover_noise, segments, restart_scheduler):
+    def sample(self, model, add_noise, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, start_at_step, end_at_step, return_with_leftover_noise, segments, restart_scheduler, chunked_mode=True):
         force_full_denoise = return_with_leftover_noise != "enable"
         disable_noise = add_noise == "disable"
-        return restart_sampling(model, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, segments, restart_scheduler, disable_noise=disable_noise, step_range=(start_at_step, end_at_step), force_full_denoise=force_full_denoise)
+        return restart_sampling(model, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, segments, restart_scheduler, disable_noise=disable_noise, step_range=(start_at_step, end_at_step), force_full_denoise=force_full_denoise, chunked_mode=chunked_mode)
 
 
 class KRestartSamplerCustom:
@@ -137,6 +137,7 @@ class KRestartSamplerCustom:
                 "return_with_leftover_noise": (["disable", "enable"], ),
                 "segments": ("STRING", {"default": DEFAULT_SEGMENTS, "multiline": False}),
                 "restart_scheduler": (get_supported_restart_schedulers(), ),
+                "chunked_mode": ("BOOLEAN", {"default": True}),
             }
         }
 
@@ -145,11 +146,10 @@ class KRestartSamplerCustom:
     FUNCTION = "sample"
     CATEGORY = "sampling"
 
-    def sample(self, model, add_noise, noise_seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, start_at_step, end_at_step, return_with_leftover_noise, segments, restart_scheduler):
+    def sample(self, model, add_noise, noise_seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, start_at_step, end_at_step, return_with_leftover_noise, segments, restart_scheduler, chunked_mode=True):
         force_full_denoise = return_with_leftover_noise != "enable"
         disable_noise = add_noise == "disable"
-        return restart_sampling(model, noise_seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, segments, restart_scheduler, disable_noise=disable_noise, step_range=(start_at_step, end_at_step), force_full_denoise=force_full_denoise, output_only=False)
-
+        return restart_sampling(model, noise_seed, steps, cfg, sampler, scheduler, positive, negative, latent_image, segments, restart_scheduler, disable_noise=disable_noise, step_range=(start_at_step, end_at_step), force_full_denoise=force_full_denoise, output_only=False, chunked_mode=chunked_mode)
 
 NODE_CLASS_MAPPINGS = {
     "KRestartSamplerSimple": KRestartSamplerSimple,

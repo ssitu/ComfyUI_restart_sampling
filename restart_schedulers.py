@@ -87,10 +87,7 @@ def get_sigmas_simple_test(model, n, s_min, s_max, device):
     max_idx = torch.argmin(torch.abs(ms.sigmas - s_max))
     sigmas_slice = ms.sigmas[min_idx:max_idx]
     ss = len(sigmas_slice) / n
-    sigs = []
-    for x in range(n):
-        sigs += [float(sigmas_slice[-(1 + int(x * ss))])]
-    sigs += [0.0]
+    sigs = (*(float(sigmas_slice[-(1 + int(x * ss))]) for x in range(n)), 0.0)
     return torch.tensor(sigs, device=device)
 
 

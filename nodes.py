@@ -424,14 +424,17 @@ class RestartSampler:
         print("CHUNKS", chunks)
         chunks = [chunk for chunk in chunks if len(chunk) > 1]
 
+        last_normal_chunk = 0
         for idx, chunk_sigmas in enumerate(chunks):
-            print(">>>", idx, chunk_sigmas)
-            if idx > 0 and chunk_sigmas[0] > chunks[idx - 1][-1]:
+            print(">>>", idx, chunk_sigmas, "--", last_normal_chunk)
+            if idx > 0 and chunk_sigmas[0] > chunks[last_normal_chunk][-1]:
                 print("NOISE", chunk_sigmas[0], chunk_sigmas[-1])
                 x += (
                     torch.randn_like(x)
-                    * (chunk_sigmas[0] ** 2 - chunk_sigmas[-1] ** 2) ** 0.5
+                    * (chunk_sigmas[0] ** 2 - chunks[last_normal_chunk][-1] ** 2) ** 0.5
                 )
+            else:
+                last_normal_chunk = idx
             x = wrapped.sampler_function(model, x, chunk_sigmas, *args, **kwargs)
         return x
 

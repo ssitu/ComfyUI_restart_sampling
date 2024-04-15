@@ -1,6 +1,12 @@
 import comfy
+import torch
 
-from .restart_sampling import DEFAULT_SEGMENTS, SCHEDULER_MAPPING, restart_sampling
+from . import restart_sampling as restart
+from .restart_sampling import (
+    DEFAULT_SEGMENTS,
+    SCHEDULER_MAPPING,
+    restart_sampling,
+)
 
 
 def get_supported_samplers():
@@ -296,11 +302,147 @@ class KRestartSamplerCustom:
         )
 
 
+class RestartScheduler:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
+                "scheduler": (tuple(SCHEDULER_MAPPING.keys()),),
+                "segments": (
+                    "STRING",
+                    {"default": DEFAULT_SEGMENTS, "multiline": False},
+                ),
+                "restart_scheduler": (get_supported_restart_schedulers(),),
+                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0}),
+            },
+            "optional": {
+                "sigmas_opt": ("SIGMAS",),
+            },
+        }
+
+    RETURN_TYPES = ("SIGMAS",)
+    FUNCTION = "go"
+    CATEGORY = "sampling/custom_sampling/schedulers"
+
+    @staticmethod
+    def plan_sigmas(plan):  # noqa: ANN205
+        for pi in plan:
+            yield pi.sigmas
+            for _ in range(pi.k):
+                yield pi.restart_sigmas * -1
+
+    def go(
+        self,
+        model,
+        steps,
+        scheduler,
+        segments,
+        restart_scheduler,
+        denoise,
+        sigmas_opt=None,
+    ):
+        ms = model.get_model_object("model_sampling")
+        if sigmas_opt is None or len(sigmas_opt) < 2:
+            total_steps = steps
+            if denoise < 1.0:
+                if denoise <= 0.0:
+                    return (torch.FloatTensor([]),)
+                total_steps = int(steps / denoise)
+
+            sigmas = restart.calc_sigmas(
+                scheduler,
+                total_steps,
+                float(ms.sigma_min),
+                float(ms.sigma_max),
+                model.model,
+                "cpu",
+            )
+            sigmas = sigmas[-(steps + 1) :]
+        else:
+            sigmas = sigmas_opt
+        prepared_segments = restart.prepare_restart_segments(segments, ms, sigmas)
+        plan, restart_steps = restart.build_plan(
+            model.model,
+            prepared_segments,
+            restart_scheduler,
+            sigmas,
+            "cpu",
+        )
+        if restart.VERBOSE:
+            restart.explain_plan(plan, restart_steps, chunked=True)
+        restart_sigmas = torch.flatten(torch.cat(tuple(self.plan_sigmas(plan))))
+        print("MADE SIGMAS", restart_sigmas)
+        return (restart_sigmas,)
+
+
+class RestartSampler:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "sampler": ("SAMPLER",),
+            },
+        }
+
+    RETURN_TYPES = ("SAMPLER",)
+    FUNCTION = "go"
+    CATEGORY = "sampling/custom_sampling/samplers"
+
+    def go(self, sampler):
+        wrapped = comfy.samplers.KSAMPLER(
+            lambda *args, **kwargs: self.sampler_function(sampler, *args, **kwargs),
+            extra_options=sampler.extra_options,
+            inpaint_options=sampler.inpaint_options,
+        )
+        return (wrapped,)
+
+    @staticmethod
+    @torch.no_grad()
+    def sampler_function(wrapped, model, x, sigmas, *args, **kwargs):
+        last_sigma = None
+        chunks = []
+        while len(sigmas) > 0:
+            last_sigma = None
+            for idx in range(len(sigmas) - 1):
+                curr_sigma = sigmas[idx + 1]
+                if last_sigma is None or (
+                    curr_sigma.sign() == last_sigma.sign()
+                    and curr_sigma.abs() < last_sigma.abs()
+                ):
+                    last_sigma = curr_sigma
+                    continue
+                break
+            if idx == len(sigmas) - 2:
+                chunks.append(sigmas)
+                break
+            chunks.append(
+                sigmas[: idx + 1] * -1 if sigmas[0] < 0 else sigmas[: idx + 1],
+            )
+            sigmas = sigmas[idx + 1 :]
+        print("CHUNKS", chunks)
+        chunks = [chunk for chunk in chunks if len(chunk) > 1]
+
+        for idx, chunk_sigmas in enumerate(chunks):
+            print(">>>", idx, chunk_sigmas)
+            if idx > 0 and chunk_sigmas[0] > chunks[idx - 1][-1]:
+                print("NOISE", chunk_sigmas[0], chunk_sigmas[-1])
+                x += (
+                    torch.randn_like(x)
+                    * (chunk_sigmas[0] ** 2 - chunk_sigmas[-1] ** 2) ** 0.5
+                )
+            x = wrapped.sampler_function(model, x, chunk_sigmas, *args, **kwargs)
+        return x
+
+
 NODE_CLASS_MAPPINGS = {
     "KRestartSamplerSimple": KRestartSamplerSimple,
     "KRestartSampler": KRestartSampler,
     "KRestartSamplerAdv": KRestartSamplerAdv,
     "KRestartSamplerCustom": KRestartSamplerCustom,
+    "RestartScheduler": RestartScheduler,
+    "RestartSampler": RestartSampler,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {

@@ -314,6 +314,84 @@ class PlanItem(
         return x
 
 
+# Builds a list of PlanItems and calculates the total number of steps. See the comments for PlanItem
+# for more information about plans.
+# Returns two values: the plan and the total steps.
+@torch.no_grad()
+def build_plan(model, restart_segments, restart_scheduler, sigmas, device):
+    segments = round_restart_segments(sigmas, restart_segments)
+    total_steps = len(sigmas) - 1 + calc_restart_steps(segments)
+    plan = []
+    range_start = -1
+    for i in range(len(sigmas) - 1):
+        if range_start == -1:
+            # Starting a new plan item - main sigmas start at the current index of i.
+            range_start = i
+        s_min = sigmas[i + 1].item()
+        seg = segments.get(s_min)
+        if seg is None:
+            continue
+        s_max, k, n_restart = seg["t_max"], seg["k"], seg["n"]
+        seg_sigmas = calc_sigmas(
+            restart_scheduler,
+            n_restart,
+            s_min,
+            s_max,
+            model,
+            device=device,
+        )
+        plan.append(
+            PlanItem(sigmas[range_start : i + 2], k, s_min, s_max, seg_sigmas[:-1]),
+        )
+        range_start = -1
+    if range_start != -1:
+        # Include sigmas after the last restart segments in the plan.
+        plan.append(PlanItem(sigmas[range_start:]))
+    return plan, total_steps
+
+
+# Dumps information about the plan to the console. It uses the normal plan execute
+# logic.
+def explain_plan(plan, total_steps, chunked=True):
+    def pretty_sigmas(sigmas):
+        return ", ".join(f"{sig:.4}" for sig in sigmas.tolist())
+
+    print(plan)
+    print(f"** Dumping restart sampling plan (total steps {total_steps}):")
+    step = 0
+    last_kidx = -1
+
+    # Instead of actually sampling, we just dump information about the steps.
+    # When kidx==-1 this is a normal step, otherwise kidx==0 is the first restart,
+    # kidx==1 is the second, etc.
+    def do_sample(x, sigs, kidx=-1):
+        nonlocal step, last_kidx
+        rlabel = f"R{kidx+1:>3}" if kidx > last_kidx else "    "
+        last_kidx = kidx
+        if not chunked:
+            for i in range(len(sigs) - 1):
+                step += 1
+                print(f"[{rlabel}] Step {step:>3}: {pretty_sigmas(sigs[i:i+2])}")
+            return x
+        chunk_size = len(sigs) - 2
+        step += 1
+        print(
+            f"[{rlabel}] Step {step:>3}..{step+chunk_size:<3}: {pretty_sigmas(sigs)}",
+        )
+        step += chunk_size
+        return x
+
+    # Stub function to satisfy PlanItem.execute
+    def get_noise_sampler(*_args):
+        return lambda *_args: 0.0
+
+    for pi in plan:
+        pi.execute(0.0, do_sample, get_noise_sampler)
+    print(
+        "** Plan legend: [Rn] - steps for restart #n, normal sampling steps otherwise. Ranges are inclusive.",
+    )
+
+
 class KSamplerRestartWrapper:
     # Some extra explanation for a couple of these arguments:
     #
@@ -346,81 +424,6 @@ class KSamplerRestartWrapper:
         self.make_noise_sampler = make_noise_sampler
         self.chunked = chunked
 
-    # Builds a list of PlanItems and calculates the total number of steps. See the comments for PlanItem
-    # for more information about plans.
-    # Returns two values: the plan and the total steps.
-    @torch.no_grad()
-    def build_plan(self, sigmas, device):
-        segments = round_restart_segments(sigmas, self.restart_segments)
-        total_steps = len(sigmas) - 1 + calc_restart_steps(segments)
-        plan = []
-        range_start = -1
-        for i in range(len(sigmas) - 1):
-            if range_start == -1:
-                # Starting a new plan item - main sigmas start at the current index of i.
-                range_start = i
-            s_min = sigmas[i + 1].item()
-            seg = segments.get(s_min)
-            if seg is None:
-                continue
-            s_max, k, n_restart = seg["t_max"], seg["k"], seg["n"]
-            seg_sigmas = calc_sigmas(
-                self.restart_scheduler,
-                n_restart,
-                s_min,
-                s_max,
-                self.real_model,
-                device=device,
-            )
-            plan.append(
-                PlanItem(sigmas[range_start : i + 2], k, s_min, s_max, seg_sigmas[:-1]),
-            )
-            range_start = -1
-        if range_start != -1:
-            # Include sigmas after the last restart segments in the plan.
-            plan.append(PlanItem(sigmas[range_start:]))
-        return plan, total_steps
-
-    # Dumps information about the plan to the console. It uses the normal plan execute
-    # logic.
-    def explain_plan(self, plan, total_steps):
-        def pretty_sigmas(sigmas):
-            return ", ".join(f"{sig:.4}" for sig in sigmas.tolist())
-
-        print(f"** Dumping restart sampling plan (total steps {total_steps}):")
-        step = 0
-        last_kidx = -1
-
-        # Instead of actually sampling, we just dump information about the steps.
-        # When kidx==-1 this is a normal step, otherwise kidx==0 is the first restart,
-        # kidx==1 is the second, etc.
-        def do_sample(x, sigs, kidx=-1):
-            nonlocal step, last_kidx
-            rlabel = f"R{kidx+1:>3}" if kidx > last_kidx else "    "
-            last_kidx = kidx
-            if not self.chunked:
-                for i in range(len(sigs) - 1):
-                    step += 1
-                    print(f"[{rlabel}] Step {step:>3}: {pretty_sigmas(sigs[i:i+2])}")
-                return x
-            chunk_size = len(sigs) - 2
-            step += 1
-            print(
-                f"[{rlabel}] Step {step:>3}..{step+chunk_size:<3}: {pretty_sigmas(sigs)}",
-            )
-            step += chunk_size
-            return x
-
-        # Stub function to satisfy PlanItem.execute
-        def get_noise_sampler(*_args):
-            return lambda *_args: 0.0
-
-        for pi in plan:
-            pi.execute(0.0, do_sample, get_noise_sampler)
-        print(
-            "** Plan legend: [Rn] - steps for restart #n, normal sampling steps otherwise. Ranges are inclusive.",
-        )
-
     @torch.no_grad()
     def ksampler_restart_wrapper(
         self,
@@ -436,10 +439,16 @@ class KSamplerRestartWrapper:
         ksampler = self.ksampler
         step = 0
         seed = self.seed
-        plan, self.total_steps = self.build_plan(sigmas, x.device)
+        plan, self.total_steps = build_plan(
+            self.real_model,
+            self.restart_segments,
+            self.restart_scheduler,
+            sigmas,
+            x.device,
+        )
 
         if VERBOSE:
-            self.explain_plan(plan, self.total_steps)
+            explain_plan(plan, self.total_steps, chunked=self.chunked)
 
         def noise_sampler(*_args):
             return torch.randn_like(x)

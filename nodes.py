@@ -1,12 +1,10 @@
 import comfy
 import torch
 
-from . import restart_sampling as restart
 from .restart_sampling import (
     DEFAULT_SEGMENTS,
     SCHEDULER_MAPPING,
-    KSamplerRestartWrapper,
-    rebuild_plan,
+    RestartPlan,
     restart_sampling,
 )
 
@@ -328,13 +326,6 @@ class RestartScheduler:
     FUNCTION = "go"
     CATEGORY = "sampling/custom_sampling/schedulers"
 
-    @staticmethod
-    def plan_sigmas(plan):  # noqa: ANN205
-        for pi in plan:
-            yield pi.sigmas
-            for _ in range(pi.k):
-                yield pi.restart_sigmas
-
     def go(
         self,
         model,
@@ -345,38 +336,19 @@ class RestartScheduler:
         denoise,
         sigmas_opt=None,
     ):
-        ms = model.get_model_object("model_sampling")
-        if sigmas_opt is None or len(sigmas_opt) < 2:
-            total_steps = steps
-            if denoise < 1.0:
-                if denoise <= 0.0:
-                    return (torch.FloatTensor([]),)
-                total_steps = int(steps / denoise)
+        # RestartPlan.self_test(model, max_steps=200)
 
-            sigmas = restart.calc_sigmas(
-                scheduler,
-                total_steps,
-                float(ms.sigma_min),
-                float(ms.sigma_max),
-                model.model,
-                "cpu",
-            )
-            sigmas = sigmas[-(steps + 1) :]
-        else:
-            sigmas = sigmas_opt
-        prepared_segments = restart.prepare_restart_segments(segments, ms, sigmas)
-        plan, restart_steps = restart.build_plan(
-            model.model,
-            prepared_segments,
+        plan = RestartPlan(
+            model,
+            steps,
+            scheduler,
+            segments,
             restart_scheduler,
-            sigmas,
-            "cpu",
+            denoise,
+            sigmas=sigmas_opt,
         )
-        if restart.VERBOSE:
-            restart.explain_plan(plan, restart_steps, chunked=True)
-        restart_sigmas = torch.flatten(torch.cat(tuple(self.plan_sigmas(plan))))
-        print("MADE SIGMAS", restart_sigmas)
-        return (restart_sigmas,)
+        plan.explain(chunked=True)
+        return (plan.sigmas(),)
 
 
 class RestartSampler:
@@ -408,19 +380,25 @@ class RestartSampler:
 
     @staticmethod
     @torch.no_grad()
-    def sampler_function(wrapped, chunked, model, x, sigmas, *args, **kwargs):
-        plan, total_steps = rebuild_plan(sigmas)
-        print("Rebuilt", total_steps, plan)
-        seed = kwargs.get("extra_args", {}).get("seed")
-        rw = KSamplerRestartWrapper(
+    def sampler_function(
+        wrapped,
+        chunked,
+        model,
+        x,
+        sigmas,
+        *args: list,
+        **kwargs: dict,
+    ) -> torch.Tensor:
+        plan = RestartPlan.from_sigmas(sigmas)
+        return plan.sample(
             wrapped,
-            None,
-            None,
-            None,
-            seed,
-            chunked=chunked,
+            model,
+            x,
+            sigmas,
+            *args,
+            restart_chunked=chunked,
+            **kwargs,
         )
-        return rw.sample_plan(plan, total_steps, model, x, sigmas, *args, **kwargs)
 
 
 NODE_CLASS_MAPPINGS = {

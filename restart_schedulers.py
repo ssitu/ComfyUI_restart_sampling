@@ -7,7 +7,7 @@ from comfy.k_diffusion import sampling as k_diffusion_sampling
 # These two may be wrong for v-pred... but it seems to work?
 # Copied from k_diffusion
 def sigma_to_t(ms, sigma, quantize=True):
-    log_sigmas = ms.log_sigmas
+    log_sigmas = ms.log_sigmas.cpu()
     log_sigma = sigma.log()
     dists = log_sigma - log_sigmas[:, None]
     if quantize:

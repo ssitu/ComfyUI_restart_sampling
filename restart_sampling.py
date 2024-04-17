@@ -350,14 +350,70 @@ def build_plan(model, restart_segments, restart_scheduler, sigmas, device):
     return plan, total_steps
 
 
+def rebuild_plan(sigmas):
+    def get_normal_segment(sigmas):
+        last_sigma = None
+        for idx in range(len(sigmas)):
+            sigma = sigmas[idx]
+            if last_sigma is not None and sigma >= last_sigma:
+                return sigmas[:idx]
+            last_sigma = sigma
+        return sigmas
+
+    def get_restart_segment(sigmas, s_min):
+        last_sigma = None
+        for idx in range(len(sigmas)):
+            sigma = sigmas[idx]
+            if (last_sigma is not None and sigma >= last_sigma) or sigma < s_min:
+                return sigmas[:idx]
+            last_sigma = sigma
+        raise ValueError("Unexpected end of sigmas in a restart segment")
+
+    plan = []
+    total_steps = 0
+    while len(sigmas) > 0:
+        normal_sigmas = get_normal_segment(sigmas)
+        nslen = len(normal_sigmas)
+        sigmas = sigmas[nslen:]
+        total_steps += nslen - 1
+        if len(sigmas) == 0:
+            plan.append(PlanItem(normal_sigmas))
+            break
+        restart_sigmas = get_restart_segment(sigmas, normal_sigmas[-1])
+        rslen = len(restart_sigmas)
+        sigmas = sigmas[rslen:]
+        k = 1
+        while len(sigmas) > 0 and torch.equal(sigmas[:rslen], restart_sigmas):
+            k += 1
+            sigmas = sigmas[rslen:]
+        total_steps += (rslen - 1) * k
+        plan.append(
+            PlanItem(
+                normal_sigmas,
+                k,
+                normal_sigmas[-1],
+                restart_sigmas[0],
+                restart_sigmas,
+            ),
+        )
+    return plan, total_steps
+
+
 # Dumps information about the plan to the console. It uses the normal plan execute
 # logic.
 def explain_plan(plan, total_steps, chunked=True):
     def pretty_sigmas(sigmas):
         return ", ".join(f"{sig:.4}" for sig in sigmas.tolist())
 
-    print(plan)
     print(f"** Dumping restart sampling plan (total steps {total_steps}):")
+    for pi in plan:
+        print(
+            f"\n{pi.sigmas[-1].item():.04} .. {pi.sigmas[0].item():.04} ({len(pi.sigmas)})",
+        )
+        if pi.k > 0:
+            print(
+                f"  {pi.restart_sigmas[-1].item():.04} ({pi.s_min:.04}) .. {pi.restart_sigmas[0].item():.04} ({pi.s_max:.04}): k={pi.k} ({len(pi.restart_sigmas)})",
+            )
     step = 0
     last_kidx = -1
 
@@ -425,8 +481,10 @@ class KSamplerRestartWrapper:
         self.chunked = chunked
 
     @torch.no_grad()
-    def ksampler_restart_wrapper(
+    def sample_plan(
         self,
+        plan,
+        total_steps,
         model,
         x,
         sigmas,
@@ -436,16 +494,10 @@ class KSamplerRestartWrapper:
         disable=None,
         **kwargs,
     ):
+        self.total_steps = total_steps
         ksampler = self.ksampler
         step = 0
         seed = self.seed
-        plan, self.total_steps = build_plan(
-            self.real_model,
-            self.restart_segments,
-            self.restart_scheduler,
-            sigmas,
-            x.device,
-        )
 
         if VERBOSE:
             explain_plan(plan, self.total_steps, chunked=self.chunked)
@@ -516,3 +568,35 @@ class KSamplerRestartWrapper:
                 x = pi.execute(x, do_sample, get_noise_sampler)
 
         return x
+
+    @torch.no_grad()
+    def ksampler_restart_wrapper(
+        self,
+        model,
+        x,
+        sigmas,
+        *args,
+        extra_args=None,
+        callback=None,
+        disable=None,
+        **kwargs,
+    ):
+        plan, total_steps = build_plan(
+            self.real_model,
+            self.restart_segments,
+            self.restart_scheduler,
+            sigmas,
+            x.device,
+        )
+        return self.sample_plan(
+            plan,
+            total_steps,
+            model,
+            x,
+            sigmas,
+            *args,
+            extra_args=extra_args,
+            callback=callback,
+            disable=disable,
+            **kwargs,
+        )

@@ -5,6 +5,8 @@ from . import restart_sampling as restart
 from .restart_sampling import (
     DEFAULT_SEGMENTS,
     SCHEDULER_MAPPING,
+    KSamplerRestartWrapper,
+    rebuild_plan,
     restart_sampling,
 )
 
@@ -331,7 +333,7 @@ class RestartScheduler:
         for pi in plan:
             yield pi.sigmas
             for _ in range(pi.k):
-                yield pi.restart_sigmas * -1
+                yield pi.restart_sigmas
 
     def go(
         self,
@@ -383,6 +385,7 @@ class RestartSampler:
         return {
             "required": {
                 "sampler": ("SAMPLER",),
+                "chunked_mode": ("BOOLEAN", {"default": True}),
             },
         }
 
@@ -390,9 +393,14 @@ class RestartSampler:
     FUNCTION = "go"
     CATEGORY = "sampling/custom_sampling/samplers"
 
-    def go(self, sampler):
+    def go(self, sampler, chunked_mode):
         wrapped = comfy.samplers.KSAMPLER(
-            lambda *args, **kwargs: self.sampler_function(sampler, *args, **kwargs),
+            lambda *args, **kwargs: self.sampler_function(
+                sampler,
+                chunked_mode,
+                *args,
+                **kwargs,
+            ),
             extra_options=sampler.extra_options,
             inpaint_options=sampler.inpaint_options,
         )
@@ -400,43 +408,19 @@ class RestartSampler:
 
     @staticmethod
     @torch.no_grad()
-    def sampler_function(wrapped, model, x, sigmas, *args, **kwargs):
-        last_sigma = None
-        chunks = []
-        while len(sigmas) > 0:
-            last_sigma = None
-            for idx in range(len(sigmas) - 1):
-                curr_sigma = sigmas[idx + 1]
-                if last_sigma is None or (
-                    curr_sigma.sign() == last_sigma.sign()
-                    and curr_sigma.abs() < last_sigma.abs()
-                ):
-                    last_sigma = curr_sigma
-                    continue
-                break
-            if idx == len(sigmas) - 2:
-                chunks.append(sigmas)
-                break
-            chunks.append(
-                sigmas[: idx + 1] * -1 if sigmas[0] < 0 else sigmas[: idx + 1],
-            )
-            sigmas = sigmas[idx + 1 :]
-        print("CHUNKS", chunks)
-        chunks = [chunk for chunk in chunks if len(chunk) > 1]
-
-        last_normal_chunk = 0
-        for idx, chunk_sigmas in enumerate(chunks):
-            print(">>>", idx, chunk_sigmas, "--", last_normal_chunk)
-            if idx > 0 and chunk_sigmas[0] > chunks[last_normal_chunk][-1]:
-                print("NOISE", chunk_sigmas[0], chunk_sigmas[-1])
-                x += (
-                    torch.randn_like(x)
-                    * (chunk_sigmas[0] ** 2 - chunks[last_normal_chunk][-1] ** 2) ** 0.5
-                )
-            else:
-                last_normal_chunk = idx
-            x = wrapped.sampler_function(model, x, chunk_sigmas, *args, **kwargs)
-        return x
+    def sampler_function(wrapped, chunked, model, x, sigmas, *args, **kwargs):
+        plan, total_steps = rebuild_plan(sigmas)
+        print("Rebuilt", total_steps, plan)
+        seed = kwargs.get("extra_args", {}).get("seed")
+        rw = KSamplerRestartWrapper(
+            wrapped,
+            None,
+            None,
+            None,
+            seed,
+            chunked=chunked,
+        )
+        return rw.sample_plan(plan, total_steps, model, x, sigmas, *args, **kwargs)
 
 
 NODE_CLASS_MAPPINGS = {

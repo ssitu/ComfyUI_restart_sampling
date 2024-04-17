@@ -191,6 +191,12 @@ def restart_sampling(
         sigmas=sigmas,
     )
     plan = plan.to(model.load_device)
+    ### UNCOMMENT TO RUN SELF TEST
+    # plan.self_test(
+    #     model,
+    #     schedules=SCHEDULER_MAPPING.keys(),
+    #     restart_schedules=SCHEDULER_MAPPING.keys(),
+    # )
     sigmas = plan.sigmas()
 
     latent = latent_image
@@ -276,6 +282,12 @@ def restart_sampling(
     return (out, out_denoised)
 
 
+# PlanItem:
+# sigmas: Sigmas for normal (outside of a restart segment) sampling. They start from after the previous PlanItem's steps
+#         if there is one or simply the beginning of sampling.
+# k, s_min, s_max: This is the same as the restart segment definition. Set to 0 if there is no restart segment.
+# restart_sigmas: Sigmas for the restart segment if it exists, otherwise None.
+# Note: n_restart is not included as it can be calculated from the length of restart_sigmas.
 class PlanItem(
     namedtuple(
         "PlanItem",
@@ -283,6 +295,8 @@ class PlanItem(
         defaults=[None, 0, 0.0, 0.0, None],
     ),
 ):
+    __slots__ = ()
+
     def __new__(cls, *args: list, **kwargs: dict):
         threshold = 1e-06
         obj = super().__new__(cls, *args, **kwargs)
@@ -294,13 +308,11 @@ class PlanItem(
             raise ValueError("PlanItem: invalid restart sigmas: too short")
         if obj.s_min >= obj.s_max:
             raise ValueError("PlanItem: invalid min/max: min >= max")
-        # if obj.sigmas[-1] >= obj.restart_sigmas[0]:
         if obj.sigmas[-1] - obj.restart_sigmas[0] > threshold:
             raise ValueError(
                 "PlanItem: invalid sigmas: last normal sigma >= first restart sigma",
             )
-        # if obj.restart_sigmas[-1] < obj.sigmas[-1]:
-        if obj.sigmas[-1] - obj.restart_sigmas[-1] > 1e-02:  # threshold:
+        if obj.sigmas[-1] - obj.restart_sigmas[-1] > threshold:
             errstr = (
                 f"PlanItem: invalid sigmas: last restart sigma {obj.restart_sigmas[-1]} < last normal sigma {obj.sigmas[-1]}",
             )
@@ -318,13 +330,6 @@ class PlanItem(
                 "PlanItem: invalid restart sigmas: out of order or contains duplicates",
             )
         return obj
-
-    # sigmas: Sigmas for normal (outside of a restart segment) sampling. They start from after the previous PlanItem's steps
-    #         if there is one or simply the beginning of sampling.
-    # k, s_min, s_max: This is the same as the restart segment definition. Set to 0 if there is no restart segment.
-    # restart_sigmas: Sigmas for the restart segment if it exists, otherwise None.
-    # Note: n_restart is not included as it can be calculated from the length of restart_sigmas.
-    __slots__ = ()
 
     # Execute a plan item: runs sampling on the main sigmas, handles injecting noise for restarts
     # as well as sampling the restart steps.
@@ -379,7 +384,6 @@ class RestartPlan:
                 float(real_model.model_sampling.sigma_max),
                 real_model,
                 "cpu",
-                # model.load_device,
             )
         else:
             sigmas = sigmas.detach().cpu().clone()
@@ -442,17 +446,20 @@ class RestartPlan:
             if seg is None:
                 continue
             s_max, k, n_restart = seg["t_max"], seg["k"], seg["n"]
-            seg_sigmas = calc_sigmas(
+            if k < 1 or n_restart < 2:
+                continue
+            normal_sigmas = sigmas[range_start : i + 2]
+            restart_sigmas = calc_sigmas(
                 restart_scheduler,
                 n_restart,
-                s_min,
+                s_min if restart_scheduler != "exponential" else max(s_min, 1e-08),
                 s_max,
                 model,
                 device=device,
-            )
-            plan.append(
-                PlanItem(sigmas[range_start : i + 2], k, s_min, s_max, seg_sigmas[:-1]),
-            )
+            )[:-1]
+            # restart_sigmas[0] = s_max
+            restart_sigmas[-1] = s_min
+            plan.append(PlanItem(normal_sigmas, k, s_min, s_max, restart_sigmas))
             range_start = -1
         if range_start != -1:
             # Include sigmas after the last restart segments in the plan.
@@ -479,19 +486,11 @@ class RestartPlan:
             #   2. We hit a sigma greater or equal to the last sigma, or
             #   3. We hit a sigma less than s_min
             last_sigma = sigmas[0]
-            if s_min - last_sigma > threshold:
-                return sigmas[:2]
             for idx in range(1, len(sigmas)):
                 sigma = sigmas[idx]
-                # sigma > last_sigma
-                if last_sigma - sigma < threshold:
+                if last_sigma - sigma < -threshold:
                     return sigmas[:idx]
-
-                # sigma < s_min
-                if s_min - sigma > -threshold:
-                    # TODO: Document this part
-                    if idx < len(sigmas) - 2 and sigmas[idx + 1] - s_min < -threshold:
-                        return sigmas[:idx]
+                if sigma <= s_min:
                     return sigmas[: idx + 1]
                 last_sigma = sigma
             raise ValueError("Unexpected end of sigmas in a restart segment")
@@ -518,7 +517,6 @@ class RestartPlan:
             restart_sigmas = get_restart_segment(sigmas, normal_sigmas[-1])
             rslen = len(restart_sigmas)
             if rslen < 2:
-                print(restart_sigmas)
                 raise ValueError(
                     "Encountered invalid normal segment rebuilding sigmas: too short",
                 )
@@ -761,6 +759,7 @@ class RestartPlan:
                             )
                         except ValueError as err:
                             print(f"{label}\n\t!! FAIL: {err}")
+                            raise
                             continue
                         try:
                             p2 = RestartPlan.from_sigmas(p1.sigmas())

@@ -1,11 +1,18 @@
+import os
+
 import comfy
-import torch
 
 from .restart_sampling import (
     DEFAULT_SEGMENTS,
     SCHEDULER_MAPPING,
+    VERBOSE,
     RestartPlan,
+    RestartSampler,
     restart_sampling,
+)
+
+INCLUDE_SELFTEST = (
+    os.environ.get("COMFYUI_RESTART_SAMPLING_SELFTEST", "").strip() == "1"
 )
 
 
@@ -302,7 +309,7 @@ class KRestartSamplerCustom:
         )
 
 
-class RestartScheduler:
+class RestartSchedulerNode:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -336,8 +343,6 @@ class RestartScheduler:
         denoise,
         sigmas_opt=None,
     ):
-        # RestartPlan.self_test(model, max_steps=200)
-
         plan = RestartPlan(
             model,
             steps,
@@ -347,11 +352,12 @@ class RestartScheduler:
             denoise,
             sigmas=sigmas_opt,
         )
-        plan.explain(chunked=True)
+        if VERBOSE:
+            plan.explain(chunked=True)
         return (plan.sigmas(),)
 
 
-class RestartSampler:
+class RestartSamplerNode:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -366,39 +372,16 @@ class RestartSampler:
     CATEGORY = "sampling/custom_sampling/samplers"
 
     def go(self, sampler, chunked_mode):
-        wrapped = comfy.samplers.KSAMPLER(
-            lambda *args, **kwargs: self.sampler_function(
-                sampler,
-                chunked_mode,
-                *args,
-                **kwargs,
-            ),
-            extra_options=sampler.extra_options,
+        restart_options = {
+            "restart_chunked": chunked_mode,
+            "restart_wrapped_sampler": sampler,
+        }
+        restart_sampler = comfy.samplers.KSAMPLER(
+            RestartSampler.sampler_function,
+            extra_options=sampler.extra_options | restart_options,
             inpaint_options=sampler.inpaint_options,
         )
-        return (wrapped,)
-
-    @staticmethod
-    @torch.no_grad()
-    def sampler_function(
-        wrapped,
-        chunked,
-        model,
-        x,
-        sigmas,
-        *args: list,
-        **kwargs: dict,
-    ) -> torch.Tensor:
-        plan = RestartPlan.from_sigmas(sigmas)
-        return plan.sample(
-            wrapped,
-            model,
-            x,
-            sigmas,
-            *args,
-            restart_chunked=chunked,
-            **kwargs,
-        )
+        return (restart_sampler,)
 
 
 NODE_CLASS_MAPPINGS = {
@@ -406,8 +389,8 @@ NODE_CLASS_MAPPINGS = {
     "KRestartSampler": KRestartSampler,
     "KRestartSamplerAdv": KRestartSamplerAdv,
     "KRestartSamplerCustom": KRestartSamplerCustom,
-    "RestartScheduler": RestartScheduler,
-    "RestartSampler": RestartSampler,
+    "RestartScheduler": RestartSchedulerNode,
+    "RestartSampler": RestartSamplerNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -416,3 +399,28 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "KRestartSamplerAdv": "KSampler With Restarts (Advanced)",
     "KRestartSamplerCustom": "KSampler With Restarts (Custom)",
 }
+
+if os.environ.get("COMFYUI_RESTART_SAMPLING_SELFTEST", "").strip() == "1":
+
+    class RestartSelfTestNode:
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "model": ("MODEL",),
+                    "enabled": ("BOOLEAN", {"default": True}),
+                    "min_steps": ("INT", {"default": 2, "min": 0}),
+                    "max_steps": ("INT", {"default": 100, "min": 2}),
+                },
+            }
+
+        RETURN_TYPES = ("BOOLEAN",)
+        FUNCTION = "go"
+        CATEGORY = "sampling/custom_sampling/samplers"
+
+        def go(self, model, enabled=True, min_steps=2, max_steps=100):
+            if enabled:
+                RestartPlan.self_test(model, min_steps=min_steps, max_steps=max_steps)
+            return (True,)
+
+    NODE_CLASS_MAPPINGS["RestartSelfTest"] = RestartSelfTestNode

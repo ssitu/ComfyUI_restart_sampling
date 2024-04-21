@@ -453,25 +453,12 @@ class RestartPlan:
 
     def sigmas(self) -> torch.Tensor:
         def sigmas_generator():
-            skip = False
-            plan = self.plan
-            planlen = len(plan)
-            for idx in range(planlen):
-                pi = plan[idx]
-                nextpi = None if idx == planlen - 1 else plan[idx + 1]
-                if not skip:
-                    yield pi.sigmas
-                skip = False
-                if pi.k == 0:
-                    continue
-                for _ in range(pi.k - 1):
+            prev_last = None
+            for pi in self.plan:
+                yield pi.sigmas if prev_last != pi.sigmas[0] else pi.sigmas[1:]
+                prev_last = pi.restart_sigmas[-1] if pi.k > 0 else pi.sigmas[-1]
+                for _ in range(pi.k):
                     yield pi.restart_sigmas
-                if nextpi is None:
-                    yield pi.restart_sigmas
-                    continue
-                skip = True
-                yield pi.restart_sigmas[:-1]
-                yield nextpi.sigmas
 
         return torch.flatten(torch.cat(tuple(sigmas_generator())))
 

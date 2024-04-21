@@ -600,7 +600,8 @@ class RestartSampler:
 
         sampler = restart_wrapped_sampler.sampler_function
 
-        total_steps = len(sigmas - 1)
+        chunks = tuple(cls.split_sigmas(sigmas))
+        total_steps = sum(len(chunk) - 1 for _noise, chunk in chunks)
         step = 0
         noise_count = 0
         with trange(total_steps, disable=disable) as pbar:
@@ -635,7 +636,7 @@ class RestartSampler:
                     **kwargs,
                 )
 
-            for noise_scale, chunk_sigmas in cls.split_sigmas(sigmas):
+            for noise_scale, chunk_sigmas in chunks:
                 if noise_scale != 0:
                     s_min, s_max = chunk_sigmas[-1], chunk_sigmas[0]
                     x += (

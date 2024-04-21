@@ -356,12 +356,8 @@ class RestartPlan:
     ):
         ms = model.get_model_object("model_sampling")
 
-        effective_steps = (
-            steps
-            if step_range is not None or denoise > 0.9999
-            else int(steps / denoise)
-        )
         if sigmas is None:
+            effective_steps = steps if denoise > 0.9999 else int(steps / denoise)
             sigmas = calc_sigmas(
                 scheduler,
                 effective_steps,
@@ -371,16 +367,18 @@ class RestartPlan:
                 "cpu",
             )
         else:
+            steps = effective_steps = len(sigmas) - 1
+            steps = steps if denoise > 0.9999 else int(effective_steps * denoise)
             sigmas = sigmas.clone().detach().cpu()
         if step_range is not None:
             start_step, last_step = step_range
 
-            if last_step < (len(sigmas) - 1):
+            if last_step < len(sigmas) - 1:
                 sigmas = sigmas[: last_step + 1]
                 if force_full_denoise:
                     sigmas[-1] = 0
 
-            if start_step < (len(sigmas) - 1):
+            if start_step < len(sigmas) - 1:
                 sigmas = sigmas[start_step:]
         elif effective_steps != steps:
             sigmas = sigmas[-(steps + 1) :]

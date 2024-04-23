@@ -13,7 +13,7 @@ from comfy.samplers import KSAMPLER, sampler_object
 from comfy.utils import ProgressBar
 from tqdm.auto import trange
 
-from .restart_schedulers import SCHEDULER_MAPPING
+from .restart_schedulers import NORMAL_SCHEDULER_MAPPING, RESTART_SCHEDULER_MAPPING
 
 VERBOSE = os.environ.get("COMFYUI_VERBOSE_RESTART_SAMPLING", "").strip() == "1"
 
@@ -146,8 +146,17 @@ def round_restart_segments(ts, restart_segments):
     return t_min_mapping
 
 
-def calc_sigmas(scheduler, n, sigma_min, sigma_max, model, device):
-    return SCHEDULER_MAPPING[scheduler](model, n, sigma_min, sigma_max, device)
+def calc_sigmas(
+    scheduler,
+    n,
+    sigma_min,
+    sigma_max,
+    model,
+    device,
+    restart_segment=True,
+):
+    mapping = RESTART_SCHEDULER_MAPPING if restart_segment else NORMAL_SCHEDULER_MAPPING
+    return mapping[scheduler](model, n, sigma_min, sigma_max, device)
 
 
 def restart_sampling(
@@ -354,6 +363,14 @@ class RestartPlan:
         force_full_denoise=False,
         sigmas=None,
     ):
+        if (
+            denoise <= 0
+            or (sigmas is None and steps < 1)
+            or (sigmas is not None and len(sigmas) < 2)
+        ):
+            self.plan = []
+            self.total_steps = 0
+            return
         ms = model.get_model_object("model_sampling")
 
         if sigmas is None:
@@ -365,11 +382,14 @@ class RestartPlan:
                 float(ms.sigma_max),
                 model.model,
                 "cpu",
+                restart_segment=False,
             )
         else:
             steps = effective_steps = len(sigmas) - 1
             steps = steps if denoise > 0.9999 else int(effective_steps * denoise)
             sigmas = sigmas.clone().detach().cpu()
+        if effective_steps != steps:
+            sigmas = sigmas[-(steps + 1) :]
         if step_range is not None:
             start_step, last_step = step_range
 
@@ -380,8 +400,6 @@ class RestartPlan:
 
             if start_step < len(sigmas) - 1:
                 sigmas = sigmas[start_step:]
-        elif effective_steps != steps:
-            sigmas = sigmas[-(steps + 1) :]
 
         restart_segments = prepare_restart_segments(restart_info, ms, sigmas)
         self.plan, self.total_steps = self.build_plan_items(
@@ -408,7 +426,6 @@ class RestartPlan:
         device,
     ) -> tuple[list, int]:
         model_sigma_min = float(model.model_sampling.sigma_min)
-        model_sigma_max = float(model.model_sampling.sigma_max)
         segments = round_restart_segments(sigmas, restart_segments)
         plan = []
         range_start = -1
@@ -431,7 +448,7 @@ class RestartPlan:
                 restart_scheduler,
                 n_restart,
                 max(model_sigma_min, sigmas[i + 1]),
-                min(model_sigma_max, s_max),
+                s_max,
                 model,
                 device=device,
             )
@@ -448,6 +465,9 @@ class RestartPlan:
     def sigmas(self) -> torch.Tensor:
         # Flattens a plan into sigmas. When the first normal sigma matches the last item's
         # final sigma, we strip the first normal sigma to avoid creating duplicates.
+        if not self.plan or self.total_steps < 1:
+            return torch.FloatTensor([])
+
         def sigmas_generator():
             prev_last = None
             for pi in self.plan:
@@ -499,9 +519,9 @@ class RestartPlan:
         max_steps=100,
     ) -> None:
         if schedules is None:
-            schedules = SCHEDULER_MAPPING.keys()
+            schedules = NORMAL_SCHEDULER_MAPPING.keys()
         if restart_schedules is None:
-            restart_schedules = SCHEDULER_MAPPING.keys()
+            restart_schedules = RESTART_SCHEDULER_MAPPING.keys()
         if segments is None:
             segments = ("default", "a1111")
         for schname in schedules:

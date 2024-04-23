@@ -1,3 +1,4 @@
+import comfy
 import torch
 from comfy.k_diffusion import sampling as k_diffusion_sampling
 
@@ -81,6 +82,10 @@ def get_sigmas_ddim_uniform(model, n, s_min, s_max, device):
     return torch.tensor(sigs, device=device)
 
 
+def get_sigmas_sgm_uniform(model, n, s_min, s_max, device):
+    return normal_scheduler(model, n, s_min, s_max, sgm=True).to(device)
+
+
 def get_sigmas_simple_test(model, n, s_min, s_max, device):
     ms = model.model_sampling
     min_idx = torch.argmin(torch.abs(ms.sigmas - s_min))
@@ -91,11 +96,32 @@ def get_sigmas_simple_test(model, n, s_min, s_max, device):
     return torch.tensor(sigs, device=device)
 
 
-SCHEDULER_MAPPING = {
+def get_comfy_scheduler_fn(name):
+    return (
+        lambda model,
+        steps,
+        _smin,
+        _smax,
+        device="cpu": comfy.samplers.calculate_sigmas(
+            model.model_sampling,
+            name,
+            steps,
+        ).to(device)
+    )
+
+
+RESTART_SCHEDULER_MAPPING = {
     "normal": get_sigmas_normal,
     "karras": get_sigmas_karras,
     "exponential": get_sigmas_exponential,
     "simple": get_sigmas_simple,
     "ddim_uniform": get_sigmas_ddim_uniform,
+    "sgm_uniform": get_sigmas_sgm_uniform,
+    "simple_test": get_sigmas_simple_test,
+}
+
+NORMAL_SCHEDULER_MAPPING = {
+    k: get_comfy_scheduler_fn(k) for k in comfy.samplers.SCHEDULER_NAMES
+} | {
     "simple_test": get_sigmas_simple_test,
 }

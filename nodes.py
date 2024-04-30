@@ -410,7 +410,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "KRestartSamplerCustom": "KSampler With Restarts (Custom)",
 }
 
-if os.environ.get("COMFYUI_RESTART_SAMPLING_SELFTEST", "").strip() == "1":
+if INCLUDE_SELFTEST:
 
     class RestartSelfTestNode:
         @classmethod

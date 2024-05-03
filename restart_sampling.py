@@ -283,9 +283,14 @@ def restart_sampling(
 # PlanItem:
 # sigmas: Sigmas for normal (outside of a restart segment) sampling. They start from after the previous PlanItem's steps
 #         if there is one or simply the beginning of sampling.
-# k, s_min, s_max: This is the same as the restart segment definition. Set to 0 if there is no restart segment.
+# k: This is the same as the restart segment definition. Set to 0 if there is no restart segment.
 # restart_sigmas: Sigmas for the restart segment if it exists, otherwise None.
-# Note: n_restart is not included as it can be calculated from the length of restart_sigmas.
+# Convenience properties:
+# total_steps
+# s_min, s_max: None if no restart sigmas.
+# n_restart: 0 if no restart sigmas.
+
+
 class PlanItem(
     namedtuple(
         "PlanItem",
@@ -348,6 +353,10 @@ class PlanItem(
     @property
     def s_max(self):
         return None if self.k < 1 else self.restart_sigmas[0].item()
+
+    @property
+    def n_restart(self):
+        return 0 if self.k < 1 else len(self.restart_sigmas) - 1
 
 
 class RestartPlan:

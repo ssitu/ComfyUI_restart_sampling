@@ -469,7 +469,7 @@ class RestartPlan:
             restart_sigmas = calc_sigmas(
                 restart_scheduler,
                 n_restart,
-                max(model_sigma_min, sigmas[i + 1]),
+                max(model_sigma_min, s_min),
                 s_max,
                 model,
                 device=device,

@@ -9,7 +9,7 @@ import comfy
 import latent_preview
 import torch
 from comfy.sample import prepare_noise, sample_custom
-from comfy.samplers import KSAMPLER, sampler_object
+from comfy.samplers import KSAMPLER, KSampler, sampler_object
 from comfy.utils import ProgressBar
 from tqdm.auto import trange
 
@@ -181,7 +181,16 @@ def restart_sampling(
     sigmas=None,
 ):
     if isinstance(sampler, str):
+        # Only possible to determine this when the sampler is passed by name. When using
+        # a custom sampler, the user will need to slice sigmas when desirable.
+        discard_penultimate_sigma = sampler in getattr(
+            KSampler,
+            "DISCARD_PENULTIMATE_SIGMA_SAMPLERS",
+            set(),
+        )
         sampler = sampler_object(sampler)
+    else:
+        discard_penultimate_sigma = False
 
     plan = RestartPlan(
         model,
@@ -193,6 +202,7 @@ def restart_sampling(
         step_range=step_range,
         force_full_denoise=force_full_denoise,
         sigmas=sigmas,
+        discard_penultimate_sigma=discard_penultimate_sigma,
     )
 
     if VERBOSE:
@@ -371,6 +381,7 @@ class RestartPlan:
         step_range=None,
         force_full_denoise=False,
         sigmas=None,
+        discard_penultimate_sigma=False,
     ):
         if (
             denoise <= 0
@@ -386,13 +397,15 @@ class RestartPlan:
             effective_steps = steps if denoise > 0.9999 else int(steps / denoise)
             sigmas = calc_sigmas(
                 scheduler,
-                effective_steps,
+                effective_steps + int(discard_penultimate_sigma),  # True evaluates to 1
                 float(ms.sigma_min),
                 float(ms.sigma_max),
                 model.model,
                 "cpu",
                 restart_segment=False,
             )
+            if discard_penultimate_sigma:
+                sigmas = torch.cat((sigmas[:-2], sigmas[-1:]))
         else:
             steps = effective_steps = len(sigmas) - 1
             steps = steps if denoise > 0.9999 else int(effective_steps * denoise)

@@ -1,6 +1,20 @@
+import os
+
 import comfy
 
-from .restart_sampling import DEFAULT_SEGMENTS, SCHEDULER_MAPPING, restart_sampling
+from .restart_sampling import (
+    DEFAULT_SEGMENTS,
+    NORMAL_SCHEDULER_MAPPING,
+    RESTART_SCHEDULER_MAPPING,
+    VERBOSE,
+    RestartPlan,
+    RestartSampler,
+    restart_sampling,
+)
+
+INCLUDE_SELFTEST = (
+    os.environ.get("COMFYUI_RESTART_SAMPLING_SELFTEST", "").strip() == "1"
+)
 
 
 def get_supported_samplers():
@@ -23,7 +37,11 @@ def get_supported_samplers():
 
 
 def get_supported_restart_schedulers():
-    return list(SCHEDULER_MAPPING.keys())
+    return tuple(RESTART_SCHEDULER_MAPPING.keys())
+
+
+def get_supported_normal_schedulers():
+    return tuple(NORMAL_SCHEDULER_MAPPING.keys())
 
 
 class KRestartSamplerSimple:
@@ -36,7 +54,7 @@ class KRestartSamplerSimple:
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                 "sampler_name": (get_supported_samplers(),),
-                "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                "scheduler": (get_supported_restart_schedulers(),),
                 "positive": ("CONDITIONING",),
                 "negative": ("CONDITIONING",),
                 "latent_image": ("LATENT",),
@@ -92,7 +110,7 @@ class KRestartSampler:
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                 "sampler_name": (get_supported_samplers(),),
-                "scheduler": (tuple(SCHEDULER_MAPPING.keys()),),
+                "scheduler": (get_supported_normal_schedulers(),),
                 "positive": ("CONDITIONING",),
                 "negative": ("CONDITIONING",),
                 "latent_image": ("LATENT",),
@@ -160,7 +178,7 @@ class KRestartSamplerAdv:
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                 "sampler_name": (get_supported_samplers(),),
-                "scheduler": (tuple(SCHEDULER_MAPPING.keys()),),
+                "scheduler": (get_supported_normal_schedulers(),),
                 "positive": ("CONDITIONING",),
                 "negative": ("CONDITIONING",),
                 "latent_image": ("LATENT",),
@@ -234,7 +252,7 @@ class KRestartSamplerCustom:
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                 "sampler": ("SAMPLER",),
-                "scheduler": (tuple(SCHEDULER_MAPPING.keys()),),
+                "scheduler": (get_supported_normal_schedulers(),),
                 "positive": ("CONDITIONING",),
                 "negative": ("CONDITIONING",),
                 "latent_image": ("LATENT",),
@@ -296,11 +314,93 @@ class KRestartSamplerCustom:
         )
 
 
+class RestartSchedulerNode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
+                "scheduler": (get_supported_normal_schedulers(),),
+                "segments": (
+                    "STRING",
+                    {"default": DEFAULT_SEGMENTS, "multiline": False},
+                ),
+                "restart_scheduler": (get_supported_restart_schedulers(),),
+                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0}),
+                "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
+                "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
+            },
+            "optional": {
+                "sigmas_opt": ("SIGMAS",),
+            },
+        }
+
+    RETURN_TYPES = ("SIGMAS",)
+    FUNCTION = "go"
+    CATEGORY = "sampling/custom_sampling/schedulers"
+
+    def go(
+        self,
+        model,
+        steps,
+        scheduler,
+        segments,
+        restart_scheduler,
+        denoise,
+        start_at_step=0,
+        end_at_step=10000,
+        sigmas_opt=None,
+    ):
+        plan = RestartPlan(
+            model,
+            steps,
+            scheduler,
+            segments,
+            restart_scheduler,
+            denoise=denoise,
+            step_range=(start_at_step, end_at_step),
+            sigmas=sigmas_opt,
+        )
+        if VERBOSE:
+            plan.explain(chunked=True)
+        return (plan.sigmas(),)
+
+
+class RestartSamplerNode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "sampler": ("SAMPLER",),
+                "chunked_mode": ("BOOLEAN", {"default": True}),
+            },
+        }
+
+    RETURN_TYPES = ("SAMPLER",)
+    FUNCTION = "go"
+    CATEGORY = "sampling/custom_sampling/samplers"
+
+    def go(self, sampler, chunked_mode):
+        restart_options = {
+            "restart_chunked": chunked_mode,
+            "restart_wrapped_sampler": sampler,
+        }
+        restart_sampler = comfy.samplers.KSAMPLER(
+            RestartSampler.sampler_function,
+            extra_options=sampler.extra_options | restart_options,
+            inpaint_options=sampler.inpaint_options,
+        )
+        return (restart_sampler,)
+
+
 NODE_CLASS_MAPPINGS = {
     "KRestartSamplerSimple": KRestartSamplerSimple,
     "KRestartSampler": KRestartSampler,
     "KRestartSamplerAdv": KRestartSamplerAdv,
     "KRestartSamplerCustom": KRestartSamplerCustom,
+    "RestartScheduler": RestartSchedulerNode,
+    "RestartSampler": RestartSamplerNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -309,3 +409,28 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "KRestartSamplerAdv": "KSampler With Restarts (Advanced)",
     "KRestartSamplerCustom": "KSampler With Restarts (Custom)",
 }
+
+if INCLUDE_SELFTEST:
+
+    class RestartSelfTestNode:
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "model": ("MODEL",),
+                    "enabled": ("BOOLEAN", {"default": True}),
+                    "min_steps": ("INT", {"default": 2, "min": 0}),
+                    "max_steps": ("INT", {"default": 100, "min": 2}),
+                },
+            }
+
+        RETURN_TYPES = ("BOOLEAN",)
+        FUNCTION = "go"
+        CATEGORY = "sampling/custom_sampling/samplers"
+
+        def go(self, model, enabled=True, min_steps=2, max_steps=100):
+            if enabled:
+                RestartPlan.self_test(model, min_steps=min_steps, max_steps=max_steps)
+            return (True,)
+
+    NODE_CLASS_MAPPINGS["RestartSelfTest"] = RestartSelfTestNode

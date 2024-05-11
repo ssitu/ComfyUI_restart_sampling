@@ -690,3 +690,62 @@ class RestartSampler:
                 for i in range(len(chunk_sigmas) - 1):
                     x = do_sample(x, chunk_sigmas[i : i + 2])
         return x
+
+
+RESTART_SAMPLER_PRESETS = (("heun", "karras", "a1111"), ("euler", "karras", "a1111"))
+
+
+def make_restart_sampler_preset(name, restart_scheduler, restart_segments):
+    def sampler_function(model, x, sigmas, *args: list, **kwargs: dict):
+        plan = RestartPlan(
+            model.inner_model.model_patcher,
+            0,
+            "karras",
+            restart_segments,
+            restart_scheduler,
+            sigmas=sigmas,
+        )
+        if VERBOSE:
+            plan.explain(chunked=True)
+        restart_sigmas = plan.sigmas().to(sigmas.device)
+        del sigmas
+        sampler = comfy.samplers.sampler_object(name)
+        return RestartSampler.sampler_function(
+            model,
+            x,
+            restart_sigmas,
+            *args,
+            restart_chunked=True,
+            restart_wrapped_sampler=sampler,
+            **kwargs,
+        )
+
+    return sampler_function
+
+
+def add_samplers():
+    import importlib
+
+    from comfy.samplers import KSampler, k_diffusion_sampling
+
+    added = 0
+    for name, rscheduler, rsegs in RESTART_SAMPLER_PRESETS:
+        rname = f"restart_{name}_{rsegs}_{rscheduler}"
+        if rname in KSampler.SAMPLERS:
+            continue
+        try:
+            KSampler.SAMPLERS.append(rname)
+            setattr(
+                k_diffusion_sampling,
+                f"sample_{rname}",
+                make_restart_sampler_preset(name, rscheduler, rsegs),
+            )
+            added += 1
+            print("ADDED", rname)
+        except ValueError as exc:
+            print(f"Sonar: Failed to add {name} to built in samplers list: {exc}")
+    if added > 0:
+        importlib.reload(k_diffusion_sampling)
+
+
+add_samplers()

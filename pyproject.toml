@@ -1,0 +1,14 @@
+[project]
+name = "comfyui_restart_sampling"
+description = "Unofficial ComfyUI nodes for restart sampling based on the paper 'Restart Sampling for Improving Generative Processes' ([a/paper](https://arxiv.org/abs/2306.14878), [a/repo](https://github.com/Newbeeer/diffusion_restart_sampling))"
+version = "1.0.0"
+license = "LICENSE"
+
+[project.urls]
+Repository = "https://github.com/ssitu/ComfyUI_restart_sampling"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "ComfyUI_restart_sampling"
+Icon = ""
